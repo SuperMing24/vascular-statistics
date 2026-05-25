@@ -80,8 +80,8 @@ class ContractGraph(BaseGraph):
             Area=0
             for l in range(10):
                 if l>2:
-                    Polygons=(k for k in cyc if len(k)==l)  
-                    Pos=np.array([[self.Graph.node[j]['pos'] for j in i]  for i in Polygons])
+                    Polygons=(k for k in cyc if len(k)==l)
+                    Pos=np.array([[self.Graph.node[j]['pos'] for j in i]  for i in Polygons], dtype=object)
                     Area+=np.sum(CycleAreaAll(Pos))
 
             Check=Area>self.AreaThreshold
@@ -102,8 +102,8 @@ class ContractGraph(BaseGraph):
             Area=0
             for l in range(10):
                 if l>2:
-                    Polygons=(k for k in cyc if len(k)==l)  
-                    Pos=np.array([[GraphExt.node[j]['pos'] for j in i]  for i in Polygons])
+                    Polygons=(k for k in cyc if len(k)==l)
+                    Pos=np.array([[GraphExt.node[j]['pos'] for j in i]  for i in Polygons], dtype=object)
                     Area+=np.sum(CycleAreaAll(Pos))
             Check=Area>self.AreaThresholdExt
             return Check, Area
@@ -117,13 +117,13 @@ class ContractGraph(BaseGraph):
         NodesIndices=dict(zip(self.Nodes, NodesOrderedInd)) 
         
         # used to fill 'A' matrix
-        NeighborsMat=np.array(self.Neighbors)
-        NeighborsMat, MaskMat=numpy_fill(NeighborsMat, self.Degree) 
+        NeighborsMat=np.array(self.Neighbors, dtype=object)
+        NeighborsMat, MaskMat=numpy_fill(NeighborsMat, self.Degree)
         print(NeighborsMat.shape)
-        
+
         def GetDistMat(Pos, NbrsPos, Degree):
-            
-            NbrsPos=np.array(NbrsPos)
+
+            NbrsPos=np.array(NbrsPos, dtype=object)
             NbrsPos, MaskMat=numpy_fill(NbrsPos, Degree, 3) # padded numpy array  
             Dist0=np.linalg.norm(Pos[:,None]-NbrsPos, axis=2)*MaskMat #*nodes_degree
             Dist1=np.sum(Dist0, axis=1)
@@ -138,8 +138,8 @@ class ContractGraph(BaseGraph):
                     a[:, k] = a0 - a[:, k]
                 return a 
             
-            NbrsPos=np.array(NbrsPos)
-            NbrsPosx, NbrsPosy, NbrsPosz,  MaskMat = numpy_fill_sparse(NbrsPos, Degree, 3) # padded numpy array  
+            NbrsPos=np.array(NbrsPos, dtype=object)
+            NbrsPosx, NbrsPosy, NbrsPosz,  MaskMat = numpy_fill_sparse(NbrsPos, Degree, 3) # padded numpy array
             
             dx=sub(Pos[:, 0, None], NbrsPosx).multiply(MaskMat)
             dy=sub(Pos[:, 1, None], NbrsPosy).multiply(MaskMat)
