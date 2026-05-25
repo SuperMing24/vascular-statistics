@@ -107,7 +107,7 @@ def pajek_to_cpp_input(
     with open(vertices_out, "w", encoding="utf-8") as f:
         for nid in sorted(attrs.keys()):
             a = attrs[nid]
-            f.write(f"{nid} {a['type']} {a['pos'][0]:.6f} {a['pos'][1]:.6f} "
+            f.write(f"{nid + 1} {a['type']} {a['pos'][0]:.6f} {a['pos'][1]:.6f} "
                     f"{a['pos'][2]:.6f} {a['r']:.6f}\n")
 
     # 写入边文件：每行 n1 n2
@@ -119,7 +119,7 @@ def pajek_to_cpp_input(
             except (ValueError, TypeError):
                 u_int = u
                 v_int = v
-            f.write(f"{u_int} {v_int}\n")
+            f.write(f"{u_int + 1} {v_int + 1}\n")
 
     return edges_out, vertices_out
 
