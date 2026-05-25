@@ -1,0 +1,42 @@
+# 构建产物
+build/
+dist/
+*.egg-info/
+*.exe
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 输出
+output/
+
+# 数据文件（非样例）
+*.mat
+*.pajek
+*.swc
+*.nii
+*.nii.gz
+*.tif
+*.tiff
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+*.code-workspace
+
+# 项目文档（不入 git）
+docs/
+CLAUDE.md
+.claude/
+
+# SLURM 日志
+logs/
+*.out
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "vascular_statistics"
+version = "0.1.0"
+description = "三维血管网络形态学统计后处理与骨架化工具"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "scipy",
+    "networkx>=2.2",
+    "scikit-image",
+    "matplotlib",
+    "click>=7.0",
+    "h5py",
+]
+
+[project.optional-dependencies]
+gui = ["mayavi", "traits", "traitsui"]
+
+[project.scripts]
+vascular-stats = "vascular_statistics.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["python"]
