@@ -1,0 +1,5 @@
+{
+    "_comment": "服务器端路径覆盖 — 由 pipeline.slurm 自动注入，隔离本地与服务器路径差异",
+    "data_root": "/share/home/sukm/datasets/VascStats",
+    "output_root": "/share/home/sukm/experiments/vascstats"
+}
