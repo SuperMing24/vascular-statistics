@@ -81,7 +81,7 @@ class ContractGraph(BaseGraph):
             for l in range(10):
                 if l>2:
                     Polygons=(k for k in cyc if len(k)==l)
-                    Pos=np.array([[self.Graph.node[j]['pos'] for j in i]  for i in Polygons], dtype=object)
+                    Pos=np.array([[self.Graph.node[j]['pos'] for j in i]  for i in Polygons])
                     Area+=np.sum(CycleAreaAll(Pos))
 
             Check=Area>self.AreaThreshold
@@ -90,20 +90,20 @@ class ContractGraph(BaseGraph):
     def __CheckIterExt(self):
             '''
             check if to continue iteration or not, based on the area of polygns
-            '''            
+            '''
             #picking only moving nodes
             GraphExt=self.Graph.copy()
             rem=[]
             dumb=[rem.append(k) for k in GraphExt.GetNodes() if GraphExt.node[k]['ext']==0]
             GraphExt.remove_nodes_from(rem)
-            
+
             #find polygons
             cyc=nx.cycle_basis(GraphExt)
             Area=0
             for l in range(10):
                 if l>2:
                     Polygons=(k for k in cyc if len(k)==l)
-                    Pos=np.array([[GraphExt.node[j]['pos'] for j in i]  for i in Polygons], dtype=object)
+                    Pos=np.array([[GraphExt.node[j]['pos'] for j in i]  for i in Polygons])
                     Area+=np.sum(CycleAreaAll(Pos))
             Check=Area>self.AreaThresholdExt
             return Check, Area
