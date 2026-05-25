@@ -13,16 +13,25 @@ from copy import deepcopy
 import numpy as np
 
 class DiGraph(DiG):
-    
-    def __init__(self, NodesPos=None, Edges=None, Radii=None, data=None, Types=None):        
+
+    def __init__(self, NodesPos=None, Edges=None, Radii=None, data=None, Types=None):
         DiG.__init__(self, data)
 
-        # attributes to be stored                 
-        self.SetGeomGraph(NodesPos, Edges, Radii, Types)  
-        self.Area=0           
+        # attributes to be stored
+        self.SetGeomGraph(NodesPos, Edges, Radii, Types)
+        self.Area=0
         self.info=dict()
-   
-    #private  
+
+    @property
+    def node(self):
+        """NetworkX 3.x compatibility: G.node[n] -> G._node[n]."""
+        return self._node
+
+    def degree_iter(self, nbunch=None, weight=None):
+        """NetworkX 3.x compatibility: degree_iter -> degree."""
+        return self.degree(nbunch, weight)
+
+    #private
     def __UpdateNodesPos(self, NodesPos):
         
         AssignVals=True

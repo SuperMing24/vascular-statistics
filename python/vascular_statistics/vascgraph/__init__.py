@@ -3,6 +3,10 @@ VascGraph 子模块垫片。
 
 将 VascGraph 上游包加入 sys.path，使其内部 ``from VascGraph.X import Y``
 导入无需修改即可工作。对外暴露统一导入路径。
+
+同时修补 NetworkX 3.x 兼容性：
+- G.node[n]  → 在 Graph/DiGraph 中加 @property node 返回 _node
+- nx.connected_component_subgraphs → monkey-patch 回 networkx
 """
 
 import sys
@@ -13,6 +17,14 @@ import os
 _parent_dir = os.path.dirname(__file__)
 if _parent_dir not in sys.path:
     sys.path.insert(0, _parent_dir)
+
+# --- NetworkX 3.x 兼容补丁 ---
+import networkx as nx
+if not hasattr(nx, "connected_component_subgraphs"):
+    def _connected_component_subgraphs(G):
+        for c in nx.connected_components(G):
+            yield G.subgraph(c).copy()
+    nx.connected_component_subgraphs = _connected_component_subgraphs
 
 from VascGraph import GeomGraph as GeomGraph
 from VascGraph import Skeletonize as Skeletonize
