@@ -62,11 +62,12 @@ def stats(stem, volume, exe):
     STEM: 边/节点文件的前缀（不含 _edges/_vertices 和 .txt 后缀）。
     """
     if exe is None:
-        # 尝试在 build/ 下查找
+        # 基于项目根目录查找（不依赖 CWD）
+        _project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         candidates = [
-            "build/vessel_stats.exe",
-            "build/vessel_stats",
-            "build/Release/vessel_stats.exe",
+            os.path.join(_project_root, "build/vessel_stats.exe"),
+            os.path.join(_project_root, "build/vessel_stats"),
+            os.path.join(_project_root, "build/Release/vessel_stats.exe"),
         ]
         for c in candidates:
             if os.path.exists(c):
@@ -187,11 +188,13 @@ def pipeline(input, volume, output_stem):
     # 步骤 3：C++ 统计
     click.echo("=== 阶段 3/3: 统计 ===")
 
+    # 基于项目根目录查找 C++ 可执行文件（不依赖 CWD）
+    _project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     exe = None
     candidates = [
-        "build/vessel_stats.exe",
-        "build/vessel_stats",
-        "build/Release/vessel_stats.exe",
+        os.path.join(_project_root, "build/vessel_stats.exe"),
+        os.path.join(_project_root, "build/vessel_stats"),
+        os.path.join(_project_root, "build/Release/vessel_stats.exe"),
     ]
     for c in candidates:
         if os.path.exists(c):
