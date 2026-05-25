@@ -80,7 +80,7 @@ def stats(stem, volume, exe):
             )
             raise click.Abort()
 
-    cmd = [exe, stem, stem, str(volume)]
+    cmd = [exe, stem + "_edges", stem + "_vertices", str(volume)]
     click.echo(f"执行: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=False)
     if result.returncode != 0:
