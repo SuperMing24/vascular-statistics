@@ -33,6 +33,9 @@ docs/
 CLAUDE.md
 .claude/
 
+# 临时脚本与实验（不入 git，仿 Vascular_Extraction）
+experiments/
+
 # SLURM 日志
 logs/
 *.out
