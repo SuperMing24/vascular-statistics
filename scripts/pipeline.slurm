@@ -36,13 +36,11 @@
 #
 # ============================================================================
 
-set -euo pipefail
-
 # ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  第一部分：Slurm 资源申请                                                ║
+# ║  第一部分：Slurm 资源申请（必须在任何非注释命令之前）                       ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
-#SBATCH --job-name=vascstats
+#SBATCH --job-name=vs_pipeline
 
 #SBATCH --output=logs/pipeline_%j.out
 #SBATCH --error=logs/pipeline_%j.err
@@ -55,6 +53,8 @@ set -euo pipefail
 #SBATCH --time=08:00:00
 #SBATCH --requeue
 #SBATCH --signal=B:SIGTERM@120
+
+set -euo pipefail
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
