@@ -102,6 +102,7 @@ def skeletonize(input, output, sampling, speed, dist, med):
     INPUT: .mat 或 .tif 格式的 3D 二值分割。
     """
     from vascular_statistics.vascgraph import GraphIO, Skeletonize
+    from VascGraph.Tools.CalcTools import fixG
     ReadStackMat = GraphIO.ReadStackMat
     WritePajek = GraphIO.WritePajek
     Skeleton = Skeletonize.Skeleton
@@ -143,27 +144,38 @@ def skeletonize(input, output, sampling, speed, dist, med):
 @click.option("--output-stem", "-o", default=None, help="输出文件前缀")
 def pipeline(input, volume, output_stem):
     """完整管线：骨架化 → 格式转换 → 统计。"""
-    import tempfile
     from vascular_statistics.bridge import pajek_to_cpp_input
+    from vascular_statistics.vascgraph import GraphIO, Skeletonize
+    from VascGraph.Tools.CalcTools import fixG
+    ReadStackMat = GraphIO.ReadStackMat
+    WritePajek = GraphIO.WritePajek
+    Skeleton = Skeletonize.Skeleton
 
     if output_stem is None:
         output_stem = os.path.splitext(os.path.basename(input))[0]
 
     # 步骤 1：骨架化
-    pajek_path = output_stem + ".pajek"
-
-    # 通过 CLI 自身调用 skeletonize
     click.echo("=== 阶段 1/3: 骨架化 ===")
-    from click.testing import CliRunner
-    runner = CliRunner()
-    result = runner.invoke(
-        skeletonize,
-        ["--output", pajek_path, input],
-        catch_exceptions=False,
-    )
-    if result.exit_code != 0:
-        click.echo("骨架化失败。", err=True)
+    if input.endswith(".mat"):
+        stack = ReadStackMat(input).GetOutput()
+    elif input.endswith((".tif", ".tiff")):
+        import skimage.io as skio
+        stack = skio.imread(input)
+        stack = (stack > 0).astype(int)
+    else:
+        click.echo("不支持的输入格式。请使用 .mat 或 .tif 文件。", err=True)
         raise click.Abort()
+
+    click.echo(f"已加载分割: {stack.shape}, 前景体素数: {stack.sum()}")
+
+    sk = Skeleton(label=stack, sampling=1.0, speed_param=0.05, dist_param=0.5, med_param=0.5)
+    sk.Update()
+    graph = fixG(sk.GetOutput())
+
+    pajek_path = output_stem + ".pajek"
+    WritePajek(path="", name=pajek_path, graph=graph)
+    click.echo(f"骨架图已保存: {pajek_path}")
+    click.echo(f"节点数: {graph.number_of_nodes()}, 边数: {graph.number_of_edges()}")
 
     # 步骤 2：格式转换
     click.echo("=== 阶段 2/3: 格式转换 ===")
@@ -174,13 +186,30 @@ def pipeline(input, volume, output_stem):
 
     # 步骤 3：C++ 统计
     click.echo("=== 阶段 3/3: 统计 ===")
-    result = runner.invoke(
-        stats,
-        ["--volume", str(volume), output_stem],
-        catch_exceptions=False,
-    )
-    if result.exit_code != 0:
-        click.echo("统计失败。", err=True)
+
+    exe = None
+    candidates = [
+        "build/vessel_stats.exe",
+        "build/vessel_stats",
+        "build/Release/vessel_stats.exe",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            exe = c
+            break
+    if exe is None:
+        click.echo(
+            "找不到 C++ 可执行文件。请用 -O2 编译后通过 --exe 指定路径，"
+            "或运行: python scripts/build_cpp.py",
+            err=True,
+        )
+        raise click.Abort()
+
+    cmd = [exe, output_stem + "_edges", output_stem + "_vertices", str(volume)]
+    click.echo(f"执行: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=False)
+    if result.returncode != 0:
+        click.echo("C++ 统计执行失败。", err=True)
         raise click.Abort()
 
     click.echo(f"管线完成。汇总文件: statistics_summary.txt")

@@ -20,6 +20,7 @@ def run(input_path: str, volume: float, output_stem: str = "output") -> None:
 
     from vascular_statistics.bridge import pajek_to_cpp_input
     from vascular_statistics.vascgraph import GraphIO, Skeletonize
+    from VascGraph.Tools.CalcTools import fixG
     ReadStackMat = GraphIO.ReadStackMat
     WritePajek = GraphIO.WritePajek
     Skeleton = Skeletonize.Skeleton

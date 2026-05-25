@@ -61,7 +61,7 @@ echo ""
 FILES=()
 while IFS= read -r -d '' f; do
     FILES+=("$f")
-done < <(find "$DATA_ROOT" -maxdepth 2 -name "$PATTERN" -print0 2>/dev/null || true)
+done < <(find "$DATA_ROOT" -maxdepth 5 -name "$PATTERN" -print0 2>/dev/null || true)
 
 if [ ${#FILES[@]} -eq 0 ]; then
     echo "未找到匹配文件: $DATA_ROOT/$PATTERN"

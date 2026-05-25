@@ -25,6 +25,7 @@ def batch_skeletonize(
         生成的 Pajek 文件路径列表。
     """
     from vascular_statistics.vascgraph import GraphIO, Skeletonize
+    from VascGraph.Tools.CalcTools import fixG
     ReadStackMat = GraphIO.ReadStackMat
     WritePajek = GraphIO.WritePajek
     Skeleton = Skeletonize.Skeleton
