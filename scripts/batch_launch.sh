@@ -22,6 +22,7 @@ DATA_ROOT="/share/home/sukm/datasets/VascStats"
 PATTERN="*.tif"
 DRY=false
 VOLUME=""
+SAMPLING="1.0"
 SLURM_SCRIPT="scripts/pipeline.slurm"
 
 # --- 解析参数 ---
@@ -29,6 +30,8 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --volume|-v)
             VOLUME="$2"; shift 2 ;;
+        --sampling|-s)
+            SAMPLING="$2"; shift 2 ;;
         --pattern|-p)
             PATTERN="$2"; shift 2 ;;
         --data-root|-d)
@@ -54,6 +57,7 @@ echo "=========================================="
 echo "  Data Root : $DATA_ROOT"
 echo "  Pattern   : $PATTERN"
 echo "  Volume    : $VOLUME mm^3"
+echo "  Sampling  : $SAMPLING"
 echo "  Dry Run   : $DRY"
 echo "=========================================="
 echo ""
@@ -112,7 +116,7 @@ for f in "${FILES[@]}"; do
         --job-name="vs_${BASENAME:0:16}" \
         --output="logs/pipeline_${BASENAME}_%j.out" \
         --error="logs/pipeline_${BASENAME}_%j.err" \
-        "$SLURM_SCRIPT" "$REL_PATH" "$VOLUME" "$BASENAME" \
+        "$SLURM_SCRIPT" "$REL_PATH" "$VOLUME" "$BASENAME" "$SAMPLING" \
         2>&1 | grep -oP '\d+')
 
     if [ -n "$JOB_ID" ]; then

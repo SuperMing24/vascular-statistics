@@ -143,7 +143,8 @@ def skeletonize(input, output, sampling, speed, dist, med):
 @click.argument("input", type=click.Path(exists=True))
 @click.option("--volume", "-v", type=float, required=True, help="组织体积 (mm^3)")
 @click.option("--output-stem", "-o", default=None, help="输出文件前缀")
-def pipeline(input, volume, output_stem):
+@click.option("--sampling", "-s", type=float, default=1.0, help="稀疏采样率 (1.0=最密, 2.0=快速)")
+def pipeline(input, volume, output_stem, sampling):
     """完整管线：骨架化 → 格式转换 → 统计。"""
     from vascular_statistics.bridge import pajek_to_cpp_input
     from vascular_statistics.vascgraph import GraphIO, Skeletonize
@@ -169,7 +170,7 @@ def pipeline(input, volume, output_stem):
 
     click.echo(f"已加载分割: {stack.shape}, 前景体素数: {stack.sum()}")
 
-    sk = Skeleton(label=stack, sampling=1.0, speed_param=0.05, dist_param=0.5, med_param=0.5)
+    sk = Skeleton(label=stack, sampling=sampling, speed_param=0.05, dist_param=0.5, med_param=0.5)
     sk.Update()
     graph = fixG(sk.GetOutput())
 

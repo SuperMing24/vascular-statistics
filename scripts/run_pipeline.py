@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 
-def run(input_path: str, volume: float, output_stem: str = "output") -> None:
+def run(input_path: str, volume: float, output_stem: str = "output", sampling: float = 1.0) -> None:
     """完整管线：.mat 分割 → Pajek 骨架图 → C++ 统计。
 
     Args:
@@ -37,7 +37,7 @@ def run(input_path: str, volume: float, output_stem: str = "output") -> None:
 
     print(f"  体素尺寸: {stack.shape}, 前景: {stack.sum()}")
 
-    sk = Skeleton(label=stack, sampling=1.0, speed_param=0.05, dist_param=0.5, med_param=0.5)
+    sk = Skeleton(label=stack, sampling=sampling, speed_param=0.05, dist_param=0.5, med_param=0.5)
     sk.Update()
     graph = fixG(sk.GetOutput())
 
@@ -85,10 +85,11 @@ def run(input_path: str, volume: float, output_stem: str = "output") -> None:
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("用法: python run_pipeline.py <input.mat> <volume> [output_stem]")
+        print("用法: python run_pipeline.py <input.mat> <volume> [output_stem] [sampling]")
         sys.exit(1)
 
     input_path = sys.argv[1]
     volume = float(sys.argv[2])
     stem = sys.argv[3] if len(sys.argv) >= 4 else "output"
-    run(input_path, volume, stem)
+    sampling = float(sys.argv[4]) if len(sys.argv) >= 5 else 1.0
+    run(input_path, volume, stem, sampling)

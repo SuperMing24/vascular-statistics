@@ -67,13 +67,15 @@ DATA_ROOT="/share/home/sukm/datasets/VascStats"
 OUTPUT_ROOT="/share/home/sukm/experiments/vascstats"
 
 # --- 作业参数 ---
-# 用法：sbatch scripts/pipeline.slurm <input.tif> <volume> [output_stem]
+# 用法：sbatch scripts/pipeline.slurm <input.tif> <volume> [output_stem] [sampling]
 #   input.tif   — 输入 TIFF 堆叠（相对于 DATA_ROOT，或绝对路径）
 #   volume      — 组织体积 mm^3
 #   output_stem — 输出文件前缀（默认基于输入文件名）
+#   sampling    — 稀疏采样率 (1.0=最密, 2.0=快速, 默认 1.0)
 INPUT_FILE="${1:?缺少输入文件参数}"
 VOLUME="${2:?缺少组织体积参数 (mm^3)}"
 OUTPUT_STEM="${3:-}"
+SAMPLING="${4:-1.0}"
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
@@ -88,6 +90,7 @@ echo "  Partition  : $SLURM_JOB_PARTITION"
 echo "  Start Time : $(date '+%Y-%m-%d %H:%M:%S')"
 echo "  Input      : $INPUT_FILE"
 echo "  Volume     : $VOLUME mm^3"
+echo "  Sampling   : $SAMPLING"
 echo "  Data Root  : $DATA_ROOT"
 echo "  Output Dir : $OUTPUT_ROOT"
 echo "========================================"
@@ -208,6 +211,7 @@ PIPE_CMD=(
     pipeline "$FULL_INPUT"
     --volume "$VOLUME"
     --output-stem "$OUTPUT_STEM"
+    --sampling "$SAMPLING"
 )
 
 echo "Command: ${PIPE_CMD[*]}"
