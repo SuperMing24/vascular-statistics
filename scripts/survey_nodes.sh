@@ -82,16 +82,17 @@ for NODE in $NODES; do
     NODE_STATE=$(sinfo -h -n "$NODE" -o "%T" 2>/dev/null || echo "unknown")
     echo "  状态: $NODE_STATE"
 
-    # 用 timeout 防挂死：srun 最多等 30 秒，超时则跳过
-    # srun 在节点满配时会排队；--time=00:01:00 只限制运行时长，不限制排队时长
+    # 用 timeout 防挂死：srun 最多等 30 秒，超时则跳过。
+    # srun 在节点满配时会排队；--time=00:01:00 只限制运行时长，不限制排队时长。
+    # 注意：不能加 --output/--error 重定向 —— 那会把远程命令的 stdout 也吞掉，
+    # 导致 $() 捕获为空。srun 自身的日志走 stderr，不影响 stdout 捕获。
+    SRUN_STDERR=$(mktemp)
     OUTPUT=$(timeout 30 srun \
         --nodelist="$NODE" \
         --cpus-per-task=1 \
         --mem=1G \
         --time=00:01:00 \
         --job-name="survey_${NODE}" \
-        --output=/dev/null \
-        --error=/dev/null \
         bash -c '
             echo "NODE=$(hostname)"
             lscpu
@@ -99,7 +100,7 @@ for NODE in $NODES; do
                 echo "=== NUMACTL ==="
                 numactl --hardware 2>/dev/null || echo "numactl not available"
             fi
-        ' 2>&1) || {
+        ' 2>"$SRUN_STDERR") || {
         RC=$?
         if [ $RC -eq 124 ]; then
             echo "  [$NODE] TIMEOUT — 排队超过 30 秒，跳过"
@@ -107,11 +108,17 @@ for NODE in $NODES; do
         else
             echo "  [$NODE] FAILED — srun 退出码 $RC，跳过"
             echo "[$NODE] FAILED (exit=$RC)" >> "$SUMMARY"
+            # 输出 srun 的 stderr 以辅助诊断
+            if [ -s "$SRUN_STDERR" ]; then
+                echo "  [stderr] $(head -3 "$SRUN_STDERR" | tr '\n' ' ')"
+            fi
         fi
+        rm -f "$SRUN_STDERR"
         BUSY=$((BUSY + 1))
         echo ""
         continue
     }
+    rm -f "$SRUN_STDERR"
 
     # 解析输出
     NODE_NAME=$(echo "$OUTPUT" | grep "^NODE=" | cut -d= -f2)
