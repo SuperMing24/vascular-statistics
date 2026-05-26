@@ -92,7 +92,11 @@ while read -r NODE NODE_PART NODE_STATE; do
     # srun 在节点满配时会排队；--time=00:01:00 只限制运行时长，不限制排队时长。
     # 必须同时指定 --partition 和 --nodelist：仅 --nodelist 在某些集群上
     # （尤其 tao 分区）会报 "Requested node configuration is not available"。
-    # 注意：不能加 --output/--error 重定向 —— 那会把远程命令的 stdout 也吞掉。
+    # 注意：
+    #   - 不能加 --output/--error 重定向 —— 那会把远程命令的 stdout 也吞掉
+    #   - 必须加 < /dev/null —— srun 会继承 while read 的 stdin（here-string），
+    #     若 srun 内部读取 stdin，会把 $NODE_INFO 剩余行全吞掉，
+    #     导致 while 循环只处理第一个节点就 EOF 退出
     SRUN_STDERR=$(mktemp)
     OUTPUT=$(timeout 30 srun \
         --partition="$NODE_PART" \
@@ -108,7 +112,7 @@ while read -r NODE NODE_PART NODE_STATE; do
                 echo "=== NUMACTL ==="
                 numactl --hardware 2>/dev/null || echo "numactl not available"
             fi
-        ' 2>"$SRUN_STDERR") || {
+        ' < /dev/null 2>"$SRUN_STDERR") || {
         RC=$?
         if [ $RC -eq 124 ]; then
             echo "  [$NODE] TIMEOUT — 排队超过 30 秒，跳过"
