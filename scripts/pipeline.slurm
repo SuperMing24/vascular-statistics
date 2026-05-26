@@ -57,17 +57,32 @@
 #SBATCH --error=logs/pipeline_%j.err
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 资源申请（2026-05-26 优化，详见 docs/output_structure_blueprint.md §算力分析）
+# 资源申请（2026-05-26 优化，基于 SpMV/稀疏求解器文献调研 + 集群硬件分析）
 #
-#   CPU 核心：8（numpy BLAS 效率甜点。骨架化 85% 时间在 lsqr 求解器，
-#            OpenBLAS/MKL 自动多线程，但到 16 核只有 +11% 增益，资源翻倍）
-#   内存：48 GB（大 3D 堆栈安全余量。典型样本 ~8-16 GB，大样本 ~32 GB）
-#   时限：4 小时（典型样本 0.5-2h。短时限 = 更高回填优先级）
-#   分区：compute（96 核 × 1004 GB，CPU 任务不占用 GPU 资源）
-#   备选：tao 分区（40 核 × 376 GB，也可满足，作为 fallback）
+#   计算特征：
+#     骨架化 85% 时间在 scipy.sparse.linalg.lsqr（每次迭代 3 次 SpMV）。
+#     SpMV 是内存带宽敏感型操作（非 FLOPS 敏感），性能由 DRAM 带宽决定。
+#     10% 在 NetworkX 图操作（单线程 Python GIL），其余阶段不计。
+#
+#   CPU 核心：8
+#     SpMV 核心数超过 4-8 后收益递减（受限于内存带宽，非计算能力）。
+#     Amdahl 定律：8→16 核仅 +11% 增益但资源翻倍。
+#
+#   内存：48 GB（典型样本 ~8-16 GB，大 3D 堆栈 ~32 GB，保留 50% 余量）
+#
+#   时限：4 小时（典型 0.5-2h。短时限 = 更高回填优先级 = 更快调度）
+#
+#   分区：compute（优先）
+#     推测为双路服务器（96 核无法来自单 CPU）→ 双内存控制器 → 双倍带宽。
+#     c003 当前全空闲，为首选节点。
+#     备选：tao 分区（40 核 × 376 GB，也可满足，推测为单路）
+#
+#   [待确认] 各节点 CPU 具体型号（lscpu）、NUMA 拓扑（numactl --hardware）、
+#   内存通道数。确认后可按需调整分区选择或添加 --nodelist 偏好。
 #
 #   线程控制（关键！）：不设 OMP_NUM_THREADS 则 numpy 可能抢占节点全部 96 核，
 #   导致同节点多作业严重争抢。以下 4 项强制匹配 --cpus-per-task。
+#   OMP_PROC_BIND=close 减少 NUMA 跨片内存访问（对带宽敏感型任务有益）。
 # ═══════════════════════════════════════════════════════════════════════════
 
 #SBATCH --partition=compute
@@ -84,6 +99,11 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export NUMEXPR_NUM_THREADS=$SLURM_CPUS_PER_TASK
+
+# NUMA 亲和绑定：将线程固定在相邻核心，减少跨 NUMA 节点的内存访问延迟
+# 对内存带宽敏感的稀疏求解器（lsqr SpMV）有正向效果
+export OMP_PROC_BIND=close
+export OMP_PLACES=cores
 
 set -euo pipefail
 
