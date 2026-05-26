@@ -48,19 +48,22 @@ else
     PARTITIONS="compute,tao"
 fi
 
-# sinfo 输出格式: "nodename state"
-NODES=$(sinfo -h -p "$PARTITIONS" -o "%n %T" 2>/dev/null \
+# sinfo 输出格式: "nodename partition state"
+# 需要分区信息 —— srun 仅指定 --nodelist 在某些集群上会失败（尤其 tao 分区），
+# 必须同时指定 --partition 才能正确路由。
+NODE_INFO=$(sinfo -h -p "$PARTITIONS" -o "%n %P %T" 2>/dev/null \
     | grep -v "drain\|down\|drng\|unk\|reserved\|maint" \
-    | awk '{print $1}' \
     | sort -u || echo "")
 
-if [ -z "$NODES" ]; then
+if [ -z "$NODE_INFO" ]; then
     echo "FATAL: sinfo 未返回任何可用节点（分区: $PARTITIONS）"
     echo "提示: 尝试 --all 检测所有分区，或手动检查 sinfo 输出"
     exit 1
 fi
 
-echo "可检测节点: $(echo "$NODES" | tr '\n' ' ')"
+NODE_COUNT=$(echo "$NODE_INFO" | wc -l)
+echo "可检测节点 ($NODE_COUNT):"
+echo "$NODE_INFO" | while read -r n p s; do echo "  $n  [$p]  $s"; done
 echo ""
 
 SUMMARY="$OUTDIR/summary.txt"
@@ -75,19 +78,19 @@ SUMMARY="$OUTDIR/summary.txt"
 SUCCESS=0
 BUSY=0
 
-for NODE in $NODES; do
-    echo "--- [$NODE] ---"
-
-    # 先用 sinfo 确认节点状态，跳过完全 allocated 的
-    NODE_STATE=$(sinfo -h -n "$NODE" -o "%T" 2>/dev/null || echo "unknown")
+while read -r NODE NODE_PART NODE_STATE; do
+    [ -z "$NODE" ] && continue
+    echo "--- [$NODE] ($NODE_PART) ---"
     echo "  状态: $NODE_STATE"
 
     # 用 timeout 防挂死：srun 最多等 30 秒，超时则跳过。
     # srun 在节点满配时会排队；--time=00:01:00 只限制运行时长，不限制排队时长。
-    # 注意：不能加 --output/--error 重定向 —— 那会把远程命令的 stdout 也吞掉，
-    # 导致 $() 捕获为空。srun 自身的日志走 stderr，不影响 stdout 捕获。
+    # 必须同时指定 --partition 和 --nodelist：仅 --nodelist 在某些集群上
+    # （尤其 tao 分区）会报 "Requested node configuration is not available"。
+    # 注意：不能加 --output/--error 重定向 —— 那会把远程命令的 stdout 也吞掉。
     SRUN_STDERR=$(mktemp)
     OUTPUT=$(timeout 30 srun \
+        --partition="$NODE_PART" \
         --nodelist="$NODE" \
         --cpus-per-task=1 \
         --mem=1G \
@@ -156,7 +159,7 @@ for NODE in $NODES; do
     echo "  → $OUTDIR/${NODE_NAME}_lscpu.txt"
     echo ""
     SUCCESS=$((SUCCESS + 1))
-done
+done <<< "$NODE_INFO"
 
 echo ""
 echo "=========================================="
