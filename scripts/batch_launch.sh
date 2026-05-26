@@ -6,23 +6,44 @@
 #  用法:
 #    bash scripts/batch_launch.sh --volume 0.078              # 提交所有 .tif
 #    bash scripts/batch_launch.sh --volume 0.078 --dry         # 仅预览，不提交
+#    bash scripts/batch_launch.sh --volume 0.078 --resume       # 跳过已完成样本
 #    bash scripts/batch_launch.sh --volume 0.078 --pattern "exp1_*.tif"
 #
 #  约定:
 #    - 输入文件放在 DATA_ROOT（默认 /share/home/sukm/datasets/VascStats）
+#    - 输出写入 OUTPUT_ROOT（默认 /share/home/sukm/experiments/vascstats）
 #    - 每个文件作为一个独立 Slurm 作业提交
 #    - 提交记录存档到 logs/submit/submit_<timestamp>.log
+#
+#  输出结构 (v2):
+#    面向样本的输出目录结构 —— 每个样本一个目录，多次运行以时间戳子目录隔离。
+#    --resume 模式读取 manifest.json 跳过已完成的样本。
+#    详见 docs/output_structure_blueprint.md。
 #
 # ============================================================================
 
 set -euo pipefail
 
+# --- 项目根目录（脚本所在目录的上级） ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# --- 从 server_paths.json 读取默认路径（如文件存在） ---
+SERVER_CONFIG="$PROJECT_DIR/configs/delta/server_paths.json"
+if [ -f "$SERVER_CONFIG" ]; then
+    DATA_ROOT=$(python -c "import json; print(json.load(open('$SERVER_CONFIG'))['data_root'])" 2>/dev/null || echo "/share/home/sukm/datasets/VascStats")
+    OUTPUT_ROOT=$(python -c "import json; print(json.load(open('$SERVER_CONFIG'))['output_root'])" 2>/dev/null || echo "/share/home/sukm/experiments/vascstats")
+else
+    DATA_ROOT="/share/home/sukm/datasets/VascStats"
+    OUTPUT_ROOT="/share/home/sukm/experiments/vascstats"
+fi
+
 # --- 默认值 ---
-DATA_ROOT="/share/home/sukm/datasets/VascStats"
 PATTERN="*.tif"
 DRY=false
 VOLUME=""
 SAMPLING="1.0"
+RESUME=false
 SLURM_SCRIPT="scripts/pipeline.slurm"
 
 # --- 解析参数 ---
@@ -36,11 +57,26 @@ while [[ $# -gt 0 ]]; do
             PATTERN="$2"; shift 2 ;;
         --data-root|-d)
             DATA_ROOT="$2"; shift 2 ;;
+        --output-root|-o)
+            OUTPUT_ROOT="$2"; shift 2 ;;
         --dry)
             DRY=true; shift ;;
+        --resume|-r)
+            RESUME=true; shift ;;
         *)
             echo "Unknown option: $1"
-            echo "用法: bash scripts/batch_launch.sh --volume <mm^3> [--pattern '*.tif'] [--dry]"
+            echo "用法: bash scripts/batch_launch.sh --volume <mm^3> [选项]"
+            echo ""
+            echo "必需参数:"
+            echo "  --volume, -v <mm^3>     组织体积"
+            echo ""
+            echo "可选参数:"
+            echo "  --pattern, -p <glob>    文件匹配模式（默认 *.tif）"
+            echo "  --data-root, -d <dir>   数据根目录"
+            echo "  --output-root, -o <dir> 输出根目录"
+            echo "  --sampling, -s <float>  稀疏采样率（默认 1.0）"
+            echo "  --resume, -r            跳过已完成的样本（读取 manifest.json）"
+            echo "  --dry                   仅预览，不提交"
             exit 1 ;;
     esac
 done
@@ -54,11 +90,13 @@ fi
 echo "=========================================="
 echo "  Vascular_Statistics Batch Launcher"
 echo "=========================================="
-echo "  Data Root : $DATA_ROOT"
-echo "  Pattern   : $PATTERN"
-echo "  Volume    : $VOLUME mm^3"
-echo "  Sampling  : $SAMPLING"
-echo "  Dry Run   : $DRY"
+echo "  Data Root  : $DATA_ROOT"
+echo "  Output Root: $OUTPUT_ROOT"
+echo "  Pattern    : $PATTERN"
+echo "  Volume     : $VOLUME mm^3"
+echo "  Sampling   : $SAMPLING"
+echo "  Resume     : $RESUME"
+echo "  Dry Run    : $DRY"
 echo "=========================================="
 echo ""
 
@@ -72,21 +110,58 @@ if [ ${#FILES[@]} -eq 0 ]; then
     exit 1
 fi
 
-echo "找到 ${#FILES[@]} 个文件:"
+echo "找到 ${#FILES[@]} 个文件"
+
+# --- 恢复模式：过滤已完成样本 ---
+SKIPPED_COUNT=0
+if [ "$RESUME" = true ]; then
+    MANIFEST_PATH="$OUTPUT_ROOT/manifest.json"
+    if [ -f "$MANIFEST_PATH" ]; then
+        echo "Resume 模式：检查 manifest.json 过滤已完成样本..."
+        # 通过 Python filter_pending() 过滤
+        readarray -t FILTERED_FILES < <(
+            python -c "
+import sys
+sys.path.insert(0, '$PROJECT_DIR/python')
+from vascular_statistics.batch import filter_pending
+files = [line.strip() for line in sys.stdin if line.strip()]
+result = filter_pending(files, '$MANIFEST_PATH', '$DATA_ROOT')
+for f in result:
+    print(f)
+" <<< "$(printf '%s\n' "${FILES[@]}")"
+        )
+        SKIPPED_COUNT=$(( ${#FILES[@]} - ${#FILTERED_FILES[@]} ))
+        if [ $SKIPPED_COUNT -gt 0 ]; then
+            echo "  跳过 $SKIPPED_COUNT 个已完成样本"
+        fi
+        FILES=("${FILTERED_FILES[@]}")
+    else
+        echo "Resume 模式：manifest.json 不存在，全部提交"
+    fi
+fi
+
+if [ ${#FILES[@]} -eq 0 ]; then
+    echo "无待处理文件。所有样本均已完成。"
+    exit 0
+fi
+
+# 列出待处理文件
+echo ""
+echo "待处理 ${#FILES[@]} 个文件 (跳过 $SKIPPED_COUNT):"
 for f in "${FILES[@]}"; do
     echo "  $f"
 done
 echo ""
 
 if [ "$DRY" = true ]; then
-    echo "[DRY RUN] 以上文件将被提交。移除 --dry 以实际提交。"
+    echo "[DRY RUN] 以上 ${#FILES[@]} 个文件将被提交。移除 --dry 以实际提交。"
     exit 0
 fi
 
 # --- 提交前检查：队列中是否已有 vascstats 任务 ---
-EXISTING=$(squeue -u "$USER" -n vascstats -h 2>/dev/null | wc -l || echo "0")
+EXISTING=$(squeue -u "$USER" -n vs_pipeline -h 2>/dev/null | wc -l || echo "0")
 if [ "$EXISTING" -gt 0 ]; then
-    echo "WARNING: 队列中已有 $EXISTING 个 vascstats 任务。"
+    echo "WARNING: 队列中已有 $EXISTING 个 vs_pipeline 任务。"
     read -p "是否继续提交？[y/N] " -r REPLY
     if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
         echo "已取消。"
@@ -99,8 +174,11 @@ TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
 SUBMIT_LOG="logs/submit/submit_${TIMESTAMP}.log"
 mkdir -p "$(dirname "$SUBMIT_LOG")"
 
-# 自存档
+# 自存档（保留本次使用的脚本副本）
 cp "$0" "logs/submit/batch_launch_${TIMESTAMP}.sh" 2>/dev/null || true
+
+# --- 确保输出根目录存在 ---
+mkdir -p "$OUTPUT_ROOT"
 
 # --- 批量提交 ---
 echo "开始提交..."
@@ -108,37 +186,63 @@ echo ""
 
 JOB_IDS=()
 for f in "${FILES[@]}"; do
-    # 使用相对于 DATA_ROOT 的路径
+    # 相对于 DATA_ROOT 的路径
     REL_PATH="${f#$DATA_ROOT/}"
     BASENAME="$(basename "$f" | sed 's/\.[^.]*$//')"
 
+    # 计算 sample_key（用于 manifest pending 预注册 + 作业名）
+    SAMPLE_KEY=$(python -c "
+import sys
+sys.path.insert(0, '$PROJECT_DIR/python')
+from vascular_statistics.batch import compute_sample_key
+print(compute_sample_key('$REL_PATH'))
+")
+
+    # 提交前在 manifest 中预注册 pending 条目（如条目尚不存在）
+    python -m vascular_statistics.cli update-manifest \
+        --manifest "$OUTPUT_ROOT/manifest.json" \
+        --sample-key "$SAMPLE_KEY" \
+        --input-path "$REL_PATH" \
+        --volume-mm3 "$VOLUME" \
+        --status pending \
+        2>/dev/null || true
+
+    # Slurm 作业名：用 sample_key 的末段（文件名部分），截断到 16 字符限制
+    SHORT_NAME="$(echo "$SAMPLE_KEY" | rev | cut -d'/' -f1 | rev | cut -c1-16)"
+
+    # 提交作业
+    # 参数: INPUT_FILE (相对路径), VOLUME, OUTPUT_STEM ("skeleton"), SAMPLING
     JOB_ID=$(sbatch \
-        --job-name="vs_${BASENAME:0:16}" \
-        --output="logs/pipeline_${BASENAME}_%j.out" \
-        --error="logs/pipeline_${BASENAME}_%j.err" \
-        "$SLURM_SCRIPT" "$REL_PATH" "$VOLUME" "$BASENAME" "$SAMPLING" \
+        --job-name="vs_${SHORT_NAME}" \
+        --output="logs/pipeline_${SHORT_NAME}_%j.out" \
+        --error="logs/pipeline_${SHORT_NAME}_%j.err" \
+        "$SLURM_SCRIPT" "$REL_PATH" "$VOLUME" "skeleton" "$SAMPLING" \
         2>&1 | grep -oP '\d+')
 
     if [ -n "$JOB_ID" ]; then
-        echo "  [$JOB_ID] $BASENAME"
+        echo "  [$JOB_ID] $SAMPLE_KEY"
         JOB_IDS+=("$JOB_ID")
     else
-        echo "  [FAILED] $BASENAME"
+        echo "  [FAILED] $SAMPLE_KEY"
     fi
 done
 
 echo ""
 echo "=========================================="
 echo "  提交完成: ${#JOB_IDS[@]}/${#FILES[@]} 个作业"
-echo "  日志     : $SUBMIT_LOG"
-echo "  监控     : squeue -u $USER -n 'vs_*'"
+echo "  跳过    : $SKIPPED_COUNT 个已完成"
+echo "  日志    : $SUBMIT_LOG"
+echo "  进度    : python -m vascular_statistics.cli status --manifest $OUTPUT_ROOT/manifest.json"
+echo "  监控    : squeue -u $USER -n 'vs_*'"
 echo "=========================================="
 
 # 保存提交记录
 {
     echo "Submit: $TIMESTAMP"
     echo "Volume: $VOLUME"
-    echo "Files:"
+    echo "Sampling: $SAMPLING"
+    echo "Resume: $RESUME"
+    echo "Files (${#FILES[@]}):"
     for i in "${!FILES[@]}"; do
         echo "  ${JOB_IDS[$i]:-FAIL}  ${FILES[$i]}"
     done

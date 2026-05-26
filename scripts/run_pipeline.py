@@ -1,19 +1,40 @@
 """
 简化的端到端管线脚本 —— 一次性执行骨架化 + 格式转换 + 统计。
+
+支持两种输出模式：
+  1. 传统模式（默认）：产物写入当前目录，使用 --output-stem 作为文件名前缀
+  2. 面向样本模式（指定 --output-root）：产物写入面向样本的目录结构
+
+面向样本模式示例：
+    python scripts/run_pipeline.py input.tif 0.078 \\
+        --output-root ./experiments --data-root ./datasets
 """
 
+import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone, timedelta
 
 
-def run(input_path: str, volume: float, output_stem: str = "output", sampling: float = 1.0) -> None:
-    """完整管线：.mat 分割 → Pajek 骨架图 → C++ 统计。
+def run(
+    input_path: str,
+    volume: float,
+    output_stem: str = "output",
+    sampling: float = 1.0,
+    *,
+    output_root: str = "",
+    data_root: str = "",
+) -> None:
+    """完整管线：.mat/.tif 分割 → Pajek 骨架图 → C++ 统计。
 
-    Args:
+    参数：
         input_path: .mat 或 .tif 分割文件路径。
         volume: 组织体积 (mm^3)。
-        output_stem: 输出文件前缀。
+        output_stem: 输出文件前缀（传统模式，或面向样本模式下的默认前缀）。
+        sampling: 稀疏采样率 (1.0=最密)。
+        output_root: 输出根目录。指定后启用"面向样本"输出结构。
+        data_root: 数据根目录（面向样本模式下用于计算 sample_key）。
     """
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     sys.path.insert(0, os.path.join(project_root, "python"))
@@ -24,6 +45,33 @@ def run(input_path: str, volume: float, output_stem: str = "output", sampling: f
     ReadStackMat = GraphIO.ReadStackMat
     WritePajek = GraphIO.WritePajek
     Skeleton = Skeletonize.Skeleton
+
+    # --- 确定输出目录 ---
+    actual_output_dir = "."  # CWD（传统模式）
+    if output_root:
+        # 面向样本模式：计算 sample_key → 生成 run_id → 创建目录
+        from vascular_statistics.batch import compute_sample_key
+
+        # 计算样本相对路径
+        if data_root and input_path.startswith(data_root):
+            rel_input = os.path.relpath(input_path, data_root)
+        else:
+            rel_input = input_path
+        sample_key = compute_sample_key(rel_input)
+
+        run_id = "run_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        actual_output_dir = os.path.join(output_root, sample_key, run_id)
+        os.makedirs(actual_output_dir, exist_ok=True)
+
+        # 面向样本模式下统一用 "skeleton" 前缀
+        output_stem = "skeleton"
+
+        print(f"样本键:  {sample_key}")
+        print(f"运行 ID: {run_id}")
+        print(f"输出目录: {actual_output_dir}")
+
+    # 从原始目录开始（加载输入文件）
+    original_cwd = os.getcwd()
 
     print("=== 阶段 1/3: 骨架化 ===")
     if input_path.endswith(".mat"):
@@ -40,6 +88,9 @@ def run(input_path: str, volume: float, output_stem: str = "output", sampling: f
     sk = Skeleton(label=stack, sampling=sampling, speed_param=0.05, dist_param=0.5, med_param=0.5)
     sk.Update()
     graph = fixG(sk.GetOutput())
+
+    # 切换到输出目录写入产物
+    os.chdir(actual_output_dir)
 
     pajek_path = output_stem + ".pajek"
     WritePajek(path="", name=pajek_path, graph=graph)
@@ -79,17 +130,49 @@ def run(input_path: str, volume: float, output_stem: str = "output", sampling: f
         print(f"  编译 C++: {' '.join(compile_cmd)}")
         subprocess.run(compile_cmd, check=True)
 
-    subprocess.run([exe, output_stem, output_stem, str(volume)], check=True)
-    print(f"  完成。汇总: {output_stem}_statistics_summary.txt")
+    subprocess.run([exe, output_stem + "_edges", output_stem + "_vertices", str(volume)], check=True)
+    print(f"  完成。汇总: statistics_summary.txt")
+
+    # --- 收尾：面向样本模式下写入 run_meta.json ---
+    if output_root:
+        run_meta = {
+            "run_id": run_id,
+            "sample_key": sample_key,
+            "input_path": os.path.abspath(input_path),
+            "volume_mm3": volume,
+            "sampling": sampling,
+            "start_time": datetime.now(timezone(timedelta(hours=8))).isoformat(),
+            "status": "completed",
+        }
+        meta_path = os.path.join(actual_output_dir, "run_meta.json")
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(run_meta, f, indent=2, ensure_ascii=False)
+        print(f"  运行元数据: {meta_path}")
+
+    # 恢复原始工作目录
+    os.chdir(original_cwd)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("用法: python run_pipeline.py <input.mat> <volume> [output_stem] [sampling]")
-        sys.exit(1)
+    import argparse
 
-    input_path = sys.argv[1]
-    volume = float(sys.argv[2])
-    stem = sys.argv[3] if len(sys.argv) >= 4 else "output"
-    sampling = float(sys.argv[4]) if len(sys.argv) >= 5 else 1.0
-    run(input_path, volume, stem, sampling)
+    parser = argparse.ArgumentParser(
+        description="Vascular_Statistics 端到端管线（骨架化 + 格式转换 + 统计）"
+    )
+    parser.add_argument("input", help="输入 .mat / .tif 文件路径")
+    parser.add_argument("volume", type=float, help="组织体积 (mm^3)")
+    parser.add_argument("output_stem", nargs="?", default="output", help="输出文件前缀（默认 output）")
+    parser.add_argument("sampling", nargs="?", type=float, default=1.0, help="稀疏采样率（默认 1.0）")
+    parser.add_argument("--output-root", "-o", default="", help="输出根目录（启用面向样本的输出结构）")
+    parser.add_argument("--data-root", "-d", default="", help="数据根目录（面向样本模式下用于计算 sample_key）")
+
+    args = parser.parse_args()
+
+    run(
+        input_path=args.input,
+        volume=args.volume,
+        output_stem=args.output_stem,
+        sampling=args.sampling,
+        output_root=args.output_root,
+        data_root=args.data_root,
+    )

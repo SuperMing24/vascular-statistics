@@ -238,5 +238,128 @@ def gui():
     MainDialogue()
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# 输出结构管理命令（S3: update-manifest + status）
+# ═══════════════════════════════════════════════════════════════════════
+
+@main.command("update-manifest")
+@click.option("--manifest", type=click.Path(), required=True, help="manifest.json 的完整路径")
+@click.option("--sample-key", required=True, help="样本键 (compute_sample_key 输出)")
+@click.option("--input-path", default="", help="输入文件相对 DATA_ROOT 的路径")
+@click.option("--volume-mm3", type=float, default=0.0, help="组织体积 (mm^3)")
+@click.option("--run-id", default="", help="运行 ID (如 run_20260526_013245)")
+@click.option("--job-id", default="", help="Slurm 作业 ID")
+@click.option("--status", default="", help="状态: pending | running | completed | failed")
+@click.option("--exit-code", type=int, default=0, help="进程退出码")
+@click.option("--start-time", default="", help="ISO 格式开始时间")
+@click.option("--end-time", default="", help="ISO 格式结束时间")
+@click.option("--node", default="", help="计算节点名")
+@click.option("--commit", default="", help="代码 commit hash")
+def update_manifest_cmd(
+    manifest, sample_key, input_path, volume_mm3,
+    run_id, job_id, status, exit_code,
+    start_time, end_time, node, commit,
+):
+    """更新 manifest.json 中的运行记录。
+
+    供 pipeline.slurm 在作业开始 / 结束时调用。
+    每次调用至少需提供 --sample-key 与 --run-id / --status。
+
+    示例（作业开始时注册 running）：
+
+        python -m vascular_statistics.cli update-manifest \\\\
+            --manifest \$OUTPUT_ROOT/manifest.json \\\\
+            --sample-key "BCAS_1st/.../angiogram_crop_97_111" \\\\
+            --run-id "run_20260526_013245" \\\\
+            --status running \\\\
+            --start-time "\$(date -Iseconds)"
+
+    示例（作业结束时更新结果）：
+
+        python -m vascular_statistics.cli update-manifest \\\\
+            --manifest \$OUTPUT_ROOT/manifest.json \\\\
+            --sample-key "BCAS_1st/.../angiogram_crop_97_111" \\\\
+            --run-id "run_20260526_013245" \\\\
+            --status completed --exit-code 0 \\\\
+            --end-time "\$(date -Iseconds)"
+    """
+    from vascular_statistics.batch import update_manifest
+
+    update_manifest(
+        manifest_path=manifest,
+        sample_key=sample_key,
+        input_path=input_path,
+        volume_mm3=volume_mm3,
+        run_id=run_id,
+        job_id=job_id,
+        status=status,
+        exit_code=exit_code,
+        start_time=start_time,
+        end_time=end_time,
+        node=node,
+        commit=commit,
+    )
+    click.echo(f"[{status or 'registered'}] {sample_key} → {manifest}")
+
+
+@main.command("status")
+@click.option("--manifest", type=click.Path(exists=True), required=True,
+              help="manifest.json 的完整路径")
+@click.option("--failed-only", "-f", is_flag=True,
+              help="仅列出失败的样本")
+@click.option("--pending-only", "-p", is_flag=True,
+              help="仅列出待处理的样本")
+def status_cmd(manifest, failed_only, pending_only):
+    """查看全局管线处理进度。
+
+    读取 manifest.json 并打印汇总统计。
+    可通过 --failed-only / --pending-only 过滤。
+    """
+    import json
+
+    with open(manifest, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    stats = data.get("stats", {})
+    samples: dict[str, dict] = data.get("samples", {})
+
+    # 汇总统计
+    click.echo("Vascular_Statistics Pipeline Status")
+    click.echo("=" * 44)
+    click.echo(f"  Total samples    : {stats.get('total_samples', len(samples))}")
+    click.echo(f"  Completed        : {stats.get('completed_samples', 0)}")
+    click.echo(f"  Failed           : {stats.get('failed_samples', 0)}")
+    click.echo(f"  Pending          : {stats.get('pending_samples', 0)}")
+    if data.get("updated"):
+        click.echo(f"  Last update      : {data['updated']}")
+    click.echo()
+
+    # 明细列表
+    if failed_only:
+        click.echo("Failed samples:")
+        for key, entry in sorted(samples.items()):
+            if entry.get("latest_status") == "failed":
+                click.echo(f"  FAIL  {key}")
+    elif pending_only:
+        click.echo("Pending samples:")
+        for key, entry in sorted(samples.items()):
+            if entry.get("latest_status") != "completed":
+                click.echo(f"  PEND  {key}")
+    else:
+        # 默认：显示所有非 completed 样本
+        pending_or_failed = [
+            (k, e) for k, e in sorted(samples.items())
+            if e.get("latest_status") != "completed"
+        ]
+        if pending_or_failed:
+            click.echo(f"Non-completed samples ({len(pending_or_failed)}):")
+            for key, entry in pending_or_failed:
+                st = entry.get("latest_status", "?")
+                runs = entry.get("total_runs", 0)
+                click.echo(f"  [{st:11s}] {key}  ({runs} runs)")
+        else:
+            click.echo("All samples completed.")
+
+
 if __name__ == "__main__":
     main()
