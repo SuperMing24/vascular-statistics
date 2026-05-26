@@ -133,7 +133,8 @@ while read -r NODE NODE_PART NODE_STATE; do
     rm -f "$SRUN_STDERR"
 
     # 解析输出
-    NODE_NAME=$(echo "$OUTPUT" | grep "^NODE=" | cut -d= -f2)
+    # head -1 + tr 防御：tao 节点偶发 stdout 重复输出，取首行并清理换行符
+    NODE_NAME=$(echo "$OUTPUT" | grep "^NODE=" | head -1 | cut -d= -f2 | tr -d '\n\r')
     if [ -z "$NODE_NAME" ]; then
         echo "  [$NODE] WARNING: srun 成功但未获取到 hostname，跳过"
         echo "[$NODE] UNKNOWN (no hostname in output)" >> "$SUMMARY"
@@ -153,14 +154,14 @@ while read -r NODE NODE_PART NODE_STATE; do
         sed -i '/=== NUMACTL ===/,$d' "$OUTDIR/${NODE_NAME}_lscpu.txt"
     fi
 
-    # 提取关键字段写入汇总
-    MODEL=$(echo "$OUTPUT" | grep "Model name:" | sed 's/.*: *//')
-    CPU_COUNT=$(echo "$OUTPUT" | grep "^CPU(s):" | sed 's/.*: *//')
-    SOCKETS=$(echo "$OUTPUT" | grep "Socket(s):" | sed 's/.*: *//')
-    CORES_PER_SOCKET=$(echo "$OUTPUT" | grep "Core(s) per socket:" | sed 's/.*: *//')
-    THREADS_PER_CORE=$(echo "$OUTPUT" | grep "Thread(s) per core:" | sed 's/.*: *//')
-    L3=$(echo "$OUTPUT" | grep "L3 cache:" | sed 's/.*: *//')
-    NUMA_NODES=$(echo "$OUTPUT" | grep "NUMA node(s):" | sed 's/.*: *//')
+    # 提取关键字段写入汇总（head -1 + tr 防 tao 节点 stdout 重复）
+    MODEL=$(echo "$OUTPUT" | grep "Model name:" | head -1 | sed 's/.*: *//' | tr -d '\n\r')
+    CPU_COUNT=$(echo "$OUTPUT" | grep "^CPU(s):" | head -1 | sed 's/.*: *//' | tr -d '\n\r')
+    SOCKETS=$(echo "$OUTPUT" | grep "Socket(s):" | head -1 | sed 's/.*: *//' | tr -d '\n\r')
+    CORES_PER_SOCKET=$(echo "$OUTPUT" | grep "Core(s) per socket:" | head -1 | sed 's/.*: *//' | tr -d '\n\r')
+    THREADS_PER_CORE=$(echo "$OUTPUT" | grep "Thread(s) per core:" | head -1 | sed 's/.*: *//' | tr -d '\n\r')
+    L3=$(echo "$OUTPUT" | grep "L3 cache:" | head -1 | sed 's/.*: *//' | tr -d '\n\r')
+    NUMA_NODES=$(echo "$OUTPUT" | grep "NUMA node(s):" | head -1 | sed 's/.*: *//' | tr -d '\n\r')
 
     echo "[$NODE_NAME] $MODEL | ${CPU_COUNT}核 | ${SOCKETS}路×${CORES_PER_SOCKET}核 | HT:${THREADS_PER_CORE} | L3:${L3} | NUMA:${NUMA_NODES}" >> "$SUMMARY"
 
