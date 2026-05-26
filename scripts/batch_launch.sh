@@ -44,6 +44,7 @@ DRY=false
 VOLUME=""
 SAMPLING="1.0"
 RESUME=false
+FILES_FROM=""
 SLURM_SCRIPT="scripts/pipeline.slurm"
 
 # --- 解析参数 ---
@@ -59,6 +60,8 @@ while [[ $# -gt 0 ]]; do
             DATA_ROOT="$2"; shift 2 ;;
         --output-root|-o)
             OUTPUT_ROOT="$2"; shift 2 ;;
+        --files-from|-f)
+            FILES_FROM="$2"; shift 2 ;;
         --dry)
             DRY=true; shift ;;
         --resume|-r)
@@ -72,11 +75,16 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "可选参数:"
             echo "  --pattern, -p <glob>    文件匹配模式（默认 *.tif）"
+            echo "  --files-from, -f <file> 从文件读取样本路径列表（替换 find 扫描）"
             echo "  --data-root, -d <dir>   数据根目录"
             echo "  --output-root, -o <dir> 输出根目录"
             echo "  --sampling, -s <float>  稀疏采样率（默认 1.0）"
             echo "  --resume, -r            跳过已完成的样本（读取 manifest.json）"
             echo "  --dry                   仅预览，不提交"
+            echo ""
+            echo "--files-from 文件格式:"
+            echo "  每行一个路径，相对于 DATA_ROOT 或绝对路径。"
+            echo "  空行和 # 开头行忽略。"
             exit 1 ;;
     esac
 done
@@ -92,21 +100,50 @@ echo "  Vascular_Statistics Batch Launcher"
 echo "=========================================="
 echo "  Data Root  : $DATA_ROOT"
 echo "  Output Root: $OUTPUT_ROOT"
-echo "  Pattern    : $PATTERN"
 echo "  Volume     : $VOLUME mm^3"
 echo "  Sampling   : $SAMPLING"
 echo "  Resume     : $RESUME"
 echo "  Dry Run    : $DRY"
+if [ -n "$FILES_FROM" ]; then
+    echo "  Files From : $FILES_FROM"
+else
+    echo "  Pattern    : $PATTERN"
+fi
 echo "=========================================="
 echo ""
 
 FILES=()
-while IFS= read -r -d '' f; do
-    FILES+=("$f")
-done < <(find "$DATA_ROOT" -maxdepth 5 -name "$PATTERN" -print0 2>/dev/null || true)
+if [ -n "$FILES_FROM" ]; then
+    # 从文件读取路径列表（支持相对路径 + 绝对路径 + #注释 + 空行跳过）
+    if [ ! -f "$FILES_FROM" ]; then
+        echo "FATAL: --files-from 指定的文件不存在: $FILES_FROM"
+        exit 1
+    fi
+    while IFS= read -r line || [ -n "$line" ]; do
+        # 跳过空行和注释行
+        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+        line=$(echo "$line" | xargs)  # trim whitespace
+        [ -z "$line" ] && continue
+        # 相对路径 → 拼 DATA_ROOT 前缀
+        if [[ "$line" == /* ]]; then
+            FILES+=("$line")
+        else
+            FILES+=("$DATA_ROOT/$line")
+        fi
+    done < "$FILES_FROM"
+else
+    # 默认：find 扫描 DATA_ROOT
+    while IFS= read -r -d '' f; do
+        FILES+=("$f")
+    done < <(find "$DATA_ROOT" -maxdepth 5 -name "$PATTERN" -print0 2>/dev/null || true)
+fi
 
 if [ ${#FILES[@]} -eq 0 ]; then
-    echo "未找到匹配文件: $DATA_ROOT/$PATTERN"
+    if [ -n "$FILES_FROM" ]; then
+        echo "FATAL: --files-from 文件为空或无有效路径"
+    else
+        echo "未找到匹配文件: $DATA_ROOT/$PATTERN"
+    fi
     exit 1
 fi
 
