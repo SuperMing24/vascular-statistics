@@ -26,7 +26,7 @@
 #    └─────────────────────────────────────────────────────────────────┘
 #
 #    ┌─ 交互式调试 ────────────────────────────────────────────────────┐
-#    │  srun --partition=compute --cpus-per-task=4 --mem=16G \         │
+#    │  srun --partition=compute --cpus-per-task=8 --mem=48G \         │
 #    │       --time=00:30:00 --pty bash                                 │
 #    │  # 进入后手动激活 conda 并运行                                    │
 #    └─────────────────────────────────────────────────────────────────┘
@@ -38,10 +38,12 @@
 #
 #  与 Vascular_Extraction train.slurm 的差异:
 #   - CPU-only 任务（无 GPU 申请）
-#   - partition=compute（更多 CPU 核，避免占用 GPU 节点）
-#   - 更短的时间限制（骨架化一条血管通常 < 2h）
+#   - partition=compute（96 核 × 1004 GB，CPU 任务不占 GPU 槽位）
+#   - 8 核 + 48 GB 内存（numpy BLAS 效率甜点 + 大堆栈余量）
+#   - 4 小时时限（典型样本 0.5-2h，短时限 = 高回填优先级）
 #   - 无 CUDA 环境验证
 #   - 输出写入面向样本的目录结构 (v2)
+#   - 线程控制：export OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS=$SLURM_CPUS_PER_TASK
 #
 # ============================================================================
 
@@ -54,14 +56,34 @@
 #SBATCH --output=logs/pipeline_%j.out
 #SBATCH --error=logs/pipeline_%j.err
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 资源申请（2026-05-26 优化，详见 docs/output_structure_blueprint.md §算力分析）
+#
+#   CPU 核心：8（numpy BLAS 效率甜点。骨架化 85% 时间在 lsqr 求解器，
+#            OpenBLAS/MKL 自动多线程，但到 16 核只有 +11% 增益，资源翻倍）
+#   内存：48 GB（大 3D 堆栈安全余量。典型样本 ~8-16 GB，大样本 ~32 GB）
+#   时限：4 小时（典型样本 0.5-2h。短时限 = 更高回填优先级）
+#   分区：compute（96 核 × 1004 GB，CPU 任务不占用 GPU 资源）
+#   备选：tao 分区（40 核 × 376 GB，也可满足，作为 fallback）
+#
+#   线程控制（关键！）：不设 OMP_NUM_THREADS 则 numpy 可能抢占节点全部 96 核，
+#   导致同节点多作业严重争抢。以下 4 项强制匹配 --cpus-per-task。
+# ═══════════════════════════════════════════════════════════════════════════
+
 #SBATCH --partition=compute
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=48G
 #SBATCH --ntasks=1
 
-#SBATCH --time=08:00:00
+#SBATCH --time=04:00:00
 #SBATCH --requeue
 #SBATCH --signal=B:SIGTERM@120
+
+# 线程控制：锁定 numpy/scipy 的底层线性代数线程数，匹配 Slurm 分配
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export NUMEXPR_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 set -euo pipefail
 
