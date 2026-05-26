@@ -51,9 +51,14 @@ fi
 # sinfo 输出格式: "nodename partition state"
 # 需要分区信息 —— srun 仅指定 --nodelist 在某些集群上会失败（尤其 tao 分区），
 # 必须同时指定 --partition 才能正确路由。
+# 注意：
+#   - %P 对默认分区会输出 "compute*"（带星号），需 strip 星号才能传给 srun
+#   - 同一节点可能出现在多个分区行中，按节点名去重（取首次出现）
 NODE_INFO=$(sinfo -h -p "$PARTITIONS" -o "%n %P %T" 2>/dev/null \
     | grep -v "drain\|down\|drng\|unk\|reserved\|maint" \
-    | sort -u || echo "")
+    | sed 's/\*//g' \
+    | awk '!seen[$1]++' \
+    | sort || echo "")
 
 if [ -z "$NODE_INFO" ]; then
     echo "FATAL: sinfo 未返回任何可用节点（分区: $PARTITIONS）"
