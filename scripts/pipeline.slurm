@@ -204,7 +204,10 @@ echo "Output dir : $JOB_OUTDIR"
 echo ""
 
 # --- 向 manifest.json 注册作业开始 ---
-python -m vascular_statistics.cli update-manifest \
+# 注意：不能直接用 | sed → pipefail 下 Python 失败也会被 sed 的 exit 0 掩盖。
+# 使用 PIPESTATUS 捕获 Python 真实退出码。
+set +o pipefail
+MANIFEST_LOG=$(python -m vascular_statistics.cli update-manifest \
     --manifest "$OUTPUT_ROOT/manifest.json" \
     --sample-key "$SAMPLE_DIR" \
     --input-path "$REL_INPUT" \
@@ -215,7 +218,13 @@ python -m vascular_statistics.cli update-manifest \
     --start-time "$START_TIME" \
     --node "$SLURM_NODELIST" \
     --commit "$COMMIT_HASH" \
-    2>&1 | sed 's/^/  [manifest] /' || echo "  [manifest] WARNING: update-manifest (start) failed, continuing..."
+    2>&1)
+MANIFEST_RC=$?
+set -o pipefail
+echo "$MANIFEST_LOG" | sed 's/^/  [manifest] /'
+if [ $MANIFEST_RC -ne 0 ]; then
+    echo "  [manifest] WARNING: update-manifest (start) failed (rc=$MANIFEST_RC), continuing..."
+fi
 
 echo ""
 
@@ -352,7 +361,8 @@ if [ "$EXIT_CODE" -ne 0 ]; then
     FINAL_STATUS="failed"
 fi
 
-python -m vascular_statistics.cli update-manifest \
+set +o pipefail
+MANIFEST_LOG=$(python -m vascular_statistics.cli update-manifest \
     --manifest "$OUTPUT_ROOT/manifest.json" \
     --sample-key "$SAMPLE_DIR" \
     --run-id "$RUN_ID" \
@@ -360,7 +370,13 @@ python -m vascular_statistics.cli update-manifest \
     --exit-code "$EXIT_CODE" \
     --end-time "$END_TIME" \
     --start-time "$START_TIME" \
-    2>&1 | sed 's/^/  [manifest] /' || echo "  [manifest] WARNING: update-manifest (end) failed"
+    2>&1)
+MANIFEST_RC=$?
+set -o pipefail
+echo "$MANIFEST_LOG" | sed 's/^/  [manifest] /'
+if [ $MANIFEST_RC -ne 0 ]; then
+    echo "  [manifest] WARNING: update-manifest (end) failed (rc=$MANIFEST_RC)"
+fi
 
 # --- 写入 run_meta.json（单次运行的完整元数据） ---
 python -c "
