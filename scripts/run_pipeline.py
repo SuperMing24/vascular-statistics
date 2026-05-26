@@ -22,6 +22,7 @@ def run(
     volume: float,
     output_stem: str = "output",
     sampling: float = 1.0,
+    phases: str = "all",
     *,
     output_root: str = "",
     data_root: str = "",
@@ -30,11 +31,12 @@ def run(
 
     参数：
         input_path: .mat 或 .tif 分割文件路径。
-        volume: 组织体积 (mm^3)。
-        output_stem: 输出文件前缀（传统模式，或面向样本模式下的默认前缀）。
+        volume: 组织体积 (mm^3)。仅 phases=all/stats 时使用。
+        output_stem: 输出文件前缀。
         sampling: 稀疏采样率 (1.0=最密)。
-        output_root: 输出根目录。指定后启用"面向样本"输出结构。
-        data_root: 数据根目录（面向样本模式下用于计算 sample_key）。
+        phases: "all" | "skeletonize" | "stats"（分阶段执行）。
+        output_root: 输出根目录。
+        data_root: 数据根目录。
     """
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     sys.path.insert(0, os.path.join(project_root, "python"))
@@ -73,28 +75,56 @@ def run(
     # 从原始目录开始（加载输入文件）
     original_cwd = os.getcwd()
 
-    print("=== 阶段 1/3: 骨架化 ===")
-    if input_path.endswith(".mat"):
-        stack = ReadStackMat(input_path).GetOutput()
-    elif input_path.endswith((".tif", ".tiff")):
-        import skimage.io as skio
-        stack = skio.imread(input_path)
-        stack = (stack > 0).astype(int)
-    else:
-        raise ValueError(f"不支持的格式: {input_path}")
+    # ═══════════════════════════════════════════════════════════
+    # 阶段 1：骨架化（skeletonize / all）
+    # ═══════════════════════════════════════════════════════════
+    if phases in ("skeletonize", "all"):
+        print("=== 阶段 1/3: 骨架化 ===")
+        if input_path.endswith(".mat"):
+            stack = ReadStackMat(input_path).GetOutput()
+        elif input_path.endswith((".tif", ".tiff")):
+            import skimage.io as skio
+            stack = skio.imread(input_path)
+            stack = (stack > 0).astype(int)
+        else:
+            raise ValueError(f"不支持的格式: {input_path}")
 
-    print(f"  体素尺寸: {stack.shape}, 前景: {stack.sum()}")
+        voxel_count = int(stack.sum())
+        print(f"  体素尺寸: {stack.shape}, 前景: {voxel_count}")
 
-    sk = Skeleton(label=stack, sampling=sampling, speed_param=0.05, dist_param=0.5, med_param=0.5)
-    sk.Update()
-    graph = fixG(sk.GetOutput())
+        sk = Skeleton(label=stack, sampling=sampling,
+                      speed_param=0.05, dist_param=0.5, med_param=0.5)
+        sk.Update()
+        graph = fixG(sk.GetOutput())
 
-    # 切换到输出目录写入产物
+        # 切换到输出目录写入产物
+        os.chdir(actual_output_dir)
+
+        pajek_path = output_stem + ".pajek"
+        WritePajek(path="", name=pajek_path, graph=graph)
+        print(f"  骨架图: {pajek_path} ({graph.number_of_nodes()} 节点, {graph.number_of_edges()} 边)")
+
+        # 记录前景体素数 → 供后续体积计算
+        voxel_path = output_stem + "_voxel_count.txt"
+        with open(voxel_path, "w") as f:
+            f.write(f"{voxel_count}\n")
+        print(f"  体素计数: {voxel_path}")
+
+    if phases == "skeletonize":
+        print("管线停止（--phases skeletonize）。")
+        os.chdir(original_cwd)
+        return
+
+    # ═══════════════════════════════════════════════════════════
+    # 阶段 2：格式转换（stats / all）
+    # ═══════════════════════════════════════════════════════════
     os.chdir(actual_output_dir)
-
     pajek_path = output_stem + ".pajek"
-    WritePajek(path="", name=pajek_path, graph=graph)
-    print(f"  骨架图: {pajek_path} ({graph.number_of_nodes()} 节点, {graph.number_of_edges()} 边)")
+    if not os.path.exists(pajek_path):
+        raise FileNotFoundError(
+            f"找不到骨架图: {pajek_path}\n"
+            f"请先运行 --phases skeletonize 生成骨架图。"
+        )
 
     print("=== 阶段 2/3: 格式转换 ===")
     edges_path = output_stem + "_edges.txt"
@@ -102,6 +132,9 @@ def run(
     pajek_to_cpp_input(pajek_path, edges_path, vertices_path)
     print(f"  {edges_path}, {vertices_path}")
 
+    # ═══════════════════════════════════════════════════════════
+    # 阶段 3：C++ 统计（stats / all）
+    # ═══════════════════════════════════════════════════════════
     print("=== 阶段 3/3: C++ 统计 ===")
     candidates = [
         os.path.join(project_root, "build/vessel_stats.exe"),
@@ -141,6 +174,7 @@ def run(
             "input_path": os.path.abspath(input_path),
             "volume_mm3": volume,
             "sampling": sampling,
+            "phases": phases,
             "start_time": datetime.now(timezone(timedelta(hours=8))).isoformat(),
             "status": "completed",
         }
@@ -163,6 +197,9 @@ if __name__ == "__main__":
     parser.add_argument("volume", type=float, help="组织体积 (mm^3)")
     parser.add_argument("output_stem", nargs="?", default="output", help="输出文件前缀（默认 output）")
     parser.add_argument("sampling", nargs="?", type=float, default=1.0, help="稀疏采样率（默认 1.0）")
+    parser.add_argument("--phases", default="all",
+                        choices=["all", "skeletonize", "stats"],
+                        help="执行阶段（默认 all）")
     parser.add_argument("--output-root", "-o", default="", help="输出根目录（启用面向样本的输出结构）")
     parser.add_argument("--data-root", "-d", default="", help="数据根目录（面向样本模式下用于计算 sample_key）")
 
@@ -173,6 +210,7 @@ if __name__ == "__main__":
         volume=args.volume,
         output_stem=args.output_stem,
         sampling=args.sampling,
+        phases=args.phases,
         output_root=args.output_root,
         data_root=args.data_root,
     )

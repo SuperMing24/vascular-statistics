@@ -144,8 +144,19 @@ def skeletonize(input, output, sampling, speed, dist, med):
 @click.option("--volume", "-v", type=float, required=True, help="组织体积 (mm^3)")
 @click.option("--output-stem", "-o", default=None, help="输出文件前缀")
 @click.option("--sampling", "-s", type=float, default=1.0, help="稀疏采样率 (1.0=最密, 2.0=快速)")
-def pipeline(input, volume, output_stem, sampling):
-    """完整管线：骨架化 → 格式转换 → 统计。"""
+@click.option(
+    "--phases", default="all",
+    type=click.Choice(["all", "skeletonize", "stats"]),
+    help="执行哪些阶段。all=全流程; skeletonize=仅骨架化; stats=跳过骨架化(需已有 skeleton.pajek)")
+def pipeline(input, volume, output_stem, phases, sampling):
+    """完整管线：骨架化 → 格式转换 → 统计。
+
+    用 --phases 可分阶段执行：
+
+        --phases skeletonize  仅骨架化，输出 skeleton.pajek + voxel_count.txt
+        --phases stats        跳过骨架化，从已有 skeleton.pajek 开始
+        --phases all          全流程（默认）
+    """
     from vascular_statistics.bridge import pajek_to_cpp_input
     from vascular_statistics.vascgraph import GraphIO, Skeletonize
     from VascGraph.Tools.CalcTools import fixG
@@ -156,37 +167,62 @@ def pipeline(input, volume, output_stem, sampling):
     if output_stem is None:
         output_stem = os.path.splitext(os.path.basename(input))[0]
 
-    # 步骤 1：骨架化
-    click.echo("=== 阶段 1/3: 骨架化 ===")
-    if input.endswith(".mat"):
-        stack = ReadStackMat(input).GetOutput()
-    elif input.endswith((".tif", ".tiff")):
-        import skimage.io as skio
-        stack = skio.imread(input)
-        stack = (stack > 0).astype(int)
-    else:
-        click.echo("不支持的输入格式。请使用 .mat 或 .tif 文件。", err=True)
+    # ═════════════════════════════════════════════════════════════
+    # 阶段 1：骨架化（skeletonize / all）
+    # ═════════════════════════════════════════════════════════════
+    if phases in ("skeletonize", "all"):
+        click.echo("=== 阶段 1/3: 骨架化 ===")
+        if input.endswith(".mat"):
+            stack = ReadStackMat(input).GetOutput()
+        elif input.endswith((".tif", ".tiff")):
+            import skimage.io as skio
+            stack = skio.imread(input)
+            stack = (stack > 0).astype(int)
+        else:
+            click.echo("不支持的输入格式。请使用 .mat 或 .tif 文件。", err=True)
+            raise click.Abort()
+
+        voxel_count = int(stack.sum())
+        click.echo(f"已加载分割: {stack.shape}, 前景体素数: {voxel_count}")
+
+        sk = Skeleton(label=stack, sampling=sampling,
+                      speed_param=0.05, dist_param=0.5, med_param=0.5)
+        sk.Update()
+        graph = fixG(sk.GetOutput())
+
+        pajek_path = output_stem + ".pajek"
+        WritePajek(path="", name=pajek_path, graph=graph)
+        click.echo(f"骨架图已保存: {pajek_path}")
+        click.echo(f"节点数: {graph.number_of_nodes()}, 边数: {graph.number_of_edges()}")
+
+        # 记录前景体素数 → 供后续体积计算
+        voxel_path = output_stem + "_voxel_count.txt"
+        with open(voxel_path, "w") as f:
+            f.write(f"{voxel_count}\n")
+        click.echo(f"体素计数: {voxel_path}")
+
+    if phases == "skeletonize":
+        click.echo("管线停止（--phases skeletonize）。")
+        return
+
+    # ═════════════════════════════════════════════════════════════
+    # 阶段 2：格式转换（stats / all）
+    # ═════════════════════════════════════════════════════════════
+    click.echo("=== 阶段 2/3: 格式转换 ===")
+    pajek_path = output_stem + ".pajek"
+    if not os.path.exists(pajek_path):
+        click.echo(f"找不到骨架图文件: {pajek_path}", err=True)
+        click.echo("请先运行 --phases skeletonize 生成骨架图。", err=True)
         raise click.Abort()
 
-    click.echo(f"已加载分割: {stack.shape}, 前景体素数: {stack.sum()}")
-
-    sk = Skeleton(label=stack, sampling=sampling, speed_param=0.05, dist_param=0.5, med_param=0.5)
-    sk.Update()
-    graph = fixG(sk.GetOutput())
-
-    pajek_path = output_stem + ".pajek"
-    WritePajek(path="", name=pajek_path, graph=graph)
-    click.echo(f"骨架图已保存: {pajek_path}")
-    click.echo(f"节点数: {graph.number_of_nodes()}, 边数: {graph.number_of_edges()}")
-
-    # 步骤 2：格式转换
-    click.echo("=== 阶段 2/3: 格式转换 ===")
     edges_path = output_stem + "_edges.txt"
     vertices_path = output_stem + "_vertices.txt"
     pajek_to_cpp_input(pajek_path, edges_path, vertices_path)
     click.echo(f"已生成: {edges_path}, {vertices_path}")
 
-    # 步骤 3：C++ 统计
+    # ═════════════════════════════════════════════════════════════
+    # 阶段 3：C++ 统计（stats / all）
+    # ═════════════════════════════════════════════════════════════
     click.echo("=== 阶段 3/3: 统计 ===")
 
     # 基于项目根目录查找 C++ 可执行文件（不依赖 CWD）

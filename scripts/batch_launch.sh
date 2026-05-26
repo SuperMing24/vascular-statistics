@@ -43,6 +43,7 @@ PATTERN="*.tif"
 DRY=false
 VOLUME=""
 SAMPLING="1.0"
+PHASES="all"
 RESUME=false
 FILES_FROM=""
 SLURM_SCRIPT="scripts/pipeline.slurm"
@@ -54,6 +55,8 @@ while [[ $# -gt 0 ]]; do
             VOLUME="$2"; shift 2 ;;
         --sampling|-s)
             SAMPLING="$2"; shift 2 ;;
+        --phases)
+            PHASES="$2"; shift 2 ;;
         --pattern|-p)
             PATTERN="$2"; shift 2 ;;
         --data-root|-d)
@@ -79,6 +82,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --data-root, -d <dir>   数据根目录"
             echo "  --output-root, -o <dir> 输出根目录"
             echo "  --sampling, -s <float>  稀疏采样率（默认 1.0）"
+            echo "  --phases <phase>       执行阶段: all|skeletonize|stats（默认 all）"
             echo "  --resume, -r            跳过已完成的样本（读取 manifest.json）"
             echo "  --dry                   仅预览，不提交"
             echo ""
@@ -102,6 +106,7 @@ echo "  Data Root  : $DATA_ROOT"
 echo "  Output Root: $OUTPUT_ROOT"
 echo "  Volume     : $VOLUME mm^3"
 echo "  Sampling   : $SAMPLING"
+echo "  Phases     : $PHASES"
 echo "  Resume     : $RESUME"
 echo "  Dry Run    : $DRY"
 if [ -n "$FILES_FROM" ]; then
@@ -248,12 +253,12 @@ print(compute_sample_key('$REL_PATH'))
     SHORT_NAME="$(echo "$SAMPLE_KEY" | rev | cut -d'/' -f1 | rev | cut -c1-16)"
 
     # 提交作业
-    # 参数: INPUT_FILE (相对路径), VOLUME, OUTPUT_STEM ("skeleton"), SAMPLING
+    # 参数: INPUT_FILE, VOLUME, OUTPUT_STEM, SAMPLING, PHASES
     JOB_ID=$(sbatch \
         --job-name="vs_${SHORT_NAME}" \
         --output="logs/pipeline_${SHORT_NAME}_%j.out" \
         --error="logs/pipeline_${SHORT_NAME}_%j.err" \
-        "$SLURM_SCRIPT" "$REL_PATH" "$VOLUME" "skeleton" "$SAMPLING" \
+        "$SLURM_SCRIPT" "$REL_PATH" "$VOLUME" "skeleton" "$SAMPLING" "$PHASES" \
         2>&1 | grep -oP '\d+')
 
     if [ -n "$JOB_ID" ]; then
@@ -278,6 +283,7 @@ echo "=========================================="
     echo "Submit: $TIMESTAMP"
     echo "Volume: $VOLUME"
     echo "Sampling: $SAMPLING"
+    echo "Phases: $PHASES"
     echo "Resume: $RESUME"
     echo "Files (${#FILES[@]}):"
     for i in "${!FILES[@]}"; do
