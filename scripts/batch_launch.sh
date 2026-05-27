@@ -47,6 +47,7 @@ PHASES="all"
 RESUME=false
 FILES_FROM=""
 SLURM_SCRIPT="scripts/pipeline.slurm"
+PARTITION="compute"
 MIN_SKELETONS=0
 MAX_SKELETONS=-1
 COUNT_ONLY=false
@@ -78,6 +79,8 @@ while [[ $# -gt 0 ]]; do
             MAX_SKELETONS="$2"; shift 2 ;;
         --count-skeletons)
             COUNT_ONLY=true; shift ;;
+        --partition)
+            PARTITION="$2"; shift 2 ;;
         *)
             echo "Unknown option: $1"
             echo "用法: bash scripts/batch_launch.sh --volume <mm^3> [选项]"
@@ -96,6 +99,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --min-skeletons <N>     跳过已有 >= N 个 .pajek 的样本（磁盘扫描，适用于 --phases skeletonize）"
             echo "  --max-skeletons <N>     跳过已有 >= N 个 .pajek 的样本（0 = 全部提交）"
             echo "  --count-skeletons       仅统计各样本已有 .pajek 数，不提交"
+            echo "  --partition <name>     Slurm 分区（默认 compute，可选 tao/control/gpu）"
             echo "  --dry                   仅预览，不提交"
             echo ""
             echo "--files-from 文件格式:"
@@ -119,6 +123,7 @@ echo "  Data Root  : $DATA_ROOT"
 echo "  Output Root: $OUTPUT_ROOT"
 echo "  Volume     : $VOLUME mm^3"
 echo "  Sampling   : $SAMPLING"
+echo "  Partition   : $PARTITION"
 echo "  Phases       : $PHASES"
 echo "  Resume       : $RESUME"
 echo "  Min Skeletons: $MIN_SKELETONS"
@@ -350,6 +355,7 @@ print(compute_sample_key('$REL_PATH'))
     # 提交作业
     # 参数: INPUT_FILE, VOLUME, OUTPUT_STEM, SAMPLING, PHASES
     JOB_ID=$(sbatch \
+        --partition="$PARTITION" \
         --job-name="vs_${SHORT_NAME}" \
         --output="logs/pipeline_${SHORT_NAME}_%j.out" \
         --error="logs/pipeline_${SHORT_NAME}_%j.err" \
