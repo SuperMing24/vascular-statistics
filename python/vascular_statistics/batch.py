@@ -6,6 +6,7 @@
 import json
 import os
 import fcntl
+import shutil
 import tempfile
 import glob
 from datetime import datetime, timezone, timedelta
@@ -78,10 +79,31 @@ def compute_sample_key(input_rel_path: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════
 
 def load_manifest(manifest_path: str) -> dict:
-    """加载 manifest.json，若文件不存在则返回空骨架字典。"""
+    """加载 manifest.json，若文件不存在则返回空骨架字典。
+
+    JSON 损坏时自动备份损坏文件并返回空骨架，
+    确保管线不会被已损坏的 manifest 阻塞。
+    """
     if os.path.exists(manifest_path):
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            # 备份损坏文件供事后诊断
+            backup_path = manifest_path + ".corrupted." + datetime.now(
+                timezone(timedelta(hours=8))
+            ).strftime("%Y%m%d_%H%M%S")
+            try:
+                shutil.copy2(manifest_path, backup_path)
+                print(
+                    f"[manifest] WARNING: JSON 损坏 ({e})，已备份至 {backup_path}",
+                    flush=True,
+                )
+            except OSError:
+                print(
+                    f"[manifest] WARNING: JSON 损坏 ({e})，备份失败，返回空骨架",
+                    flush=True,
+                )
     return {
         "version": "1.0",
         "project": "Vascular_Statistics",
