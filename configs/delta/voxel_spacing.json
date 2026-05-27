@@ -2,7 +2,7 @@
     "_comment": "体素物理分辨率配置 — 层级 fallback: per_sample > per_group > default。null = 跳过本级用下级。",
     "version": "1.0",
     "units": "micrometers",
-    "default": [0.62, 0.62, 6.0],
+    "default": [1.114200, 1.065200, 2.0],
     "per_group": {
         "BCAS_1st": null,
         "BCAS_2nd": null,
