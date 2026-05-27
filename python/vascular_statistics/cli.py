@@ -469,5 +469,32 @@ def extract_metadata_cmd(data_root, output_root, voxel_spacing_config,
     click.echo(f"全局目录: {result['catalog_path']}")
 
 
+@main.command("aggregate-stats")
+@click.option("--output-root", type=click.Path(exists=True), required=True,
+              help="输出根目录（含样本子目录）")
+@click.option("--sample-key", default=None,
+              help="仅处理指定样本（缺省则全部）")
+def aggregate_stats_cmd(output_root, sample_key):
+    """汇总同一样本多次骨架化运行的形态学统计。
+
+    遍历每个样本目录下所有 run_*/statistics_summary.txt，
+    计算 4 项指标（直径 / 长度 / 段密度 / 弯曲度）的均值 ± 标准差，
+    将结果写入样本目录下的 statistics_summary.txt（与 sample_metadata.json 同级）。
+
+    示例：
+      vascular-stats aggregate-stats --output-root /share/home/sukm/experiments/vascstats
+      vascular-stats aggregate-stats --output-root ... --sample-key "BCAS_1st/20241009_A192_D0/angiogram_crop_97_111"
+    """
+    from vascular_statistics.aggregate_stats import run_aggregation
+
+    sample_keys = [sample_key] if sample_key else None
+    result = run_aggregation(output_root, sample_keys=sample_keys)
+
+    click.echo()
+    click.echo(f"已处理: {result['processed']}, "
+               f"跳过: {result['skipped']}, "
+               f"失败: {result['failed']}")
+
+
 if __name__ == "__main__":
     main()
