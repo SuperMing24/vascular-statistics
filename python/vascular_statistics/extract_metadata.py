@@ -98,7 +98,7 @@ def parse_sample_path(
 
     return {
         "group": group,
-        "animal_id": animal_id,
+        "batch_id": animal_id,  # Axxx = 成像实验批次标识，非动物编号
         "daypoint": daypoint,
         "date_dir": date_dir,
         "z_start": z_start,
@@ -248,13 +248,16 @@ def build_sample_catalog(
         if group not in by_group:
             by_group[group] = {"count": 0, "animals": set(), "sample_keys": []}
         by_group[group]["count"] += 1
-        by_group[group]["animals"].add(meta["path_parsed"]["animal_id"])
+        # 兼容旧字段名 (animal_id) 与新字段名 (batch_id)
+        pp = meta["path_parsed"]
+        batch = pp.get("batch_id") or pp.get("animal_id", "?")
+        by_group[group]["animals"].add(batch)
         by_group[group]["sample_keys"].append(sk)
 
         samples_index[sk] = {
             "group": group,
-            "animal_id": meta["path_parsed"]["animal_id"],
-            "daypoint": meta["path_parsed"]["daypoint"],
+            "batch_id": batch,
+            "daypoint": pp["daypoint"],
             "shape": meta["stack_properties"]["shape"],
             "foreground_voxel_count": meta["stack_properties"]["foreground_voxel_count"],
             "voxel_spacing_um": meta["spatial"]["voxel_spacing_um"],
@@ -369,7 +372,7 @@ def run_extraction(
                 "input_rel_path": parsed["input_rel_path"],
                 "path_parsed": {
                     "group": group,
-                    "animal_id": parsed["animal_id"],
+                    "batch_id": parsed["batch_id"],
                     "daypoint": parsed["daypoint"],
                     "date_dir": parsed["date_dir"],
                     "z_start": parsed["z_start"],

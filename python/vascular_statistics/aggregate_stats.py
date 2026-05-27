@@ -10,7 +10,6 @@ import json
 import os
 import re
 import statistics
-from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -173,21 +172,22 @@ def aggregate_sample_stats(
                 volume_mm3 = r["volume_mm3"]
                 break
 
+    # 兼容旧字段名 (animal_id) 与新字段名 (batch_id)
+    parsed = sample_meta.get("path_parsed", {})
+    batch_id = parsed.get("batch_id") or parsed.get("animal_id", "?")
+
     return {
         "sample_key": (
             sample_meta.get("sample_key", os.path.basename(sample_dir))
         ),
-        "group": sample_meta.get("path_parsed", {}).get("group", "?"),
-        "animal_id": sample_meta.get("path_parsed", {}).get("animal_id", "?"),
-        "daypoint": sample_meta.get("path_parsed", {}).get("daypoint", "?"),
+        "group": parsed.get("group", "?"),
+        "batch_id": batch_id,
+        "daypoint": parsed.get("daypoint", "?"),
         "volume_mm3": volume_mm3,
         "n_runs": len(runs_data),
         "runs": runs_data,
         "aggregates": aggregates,
         "metric_keys": metric_keys,
-        "generated_at": datetime.now(
-            timezone(timedelta(hours=8))
-        ).isoformat(),
     }
 
 
@@ -205,7 +205,7 @@ def format_aggregate_stats(agg: Dict[str, Any]) -> str:
     lines.append(sep)
     lines.append(f"样本:    {agg['sample_key']}")
     lines.append(
-        f"组别:    {agg['group']}  |  动物: {agg['animal_id']}  "
+        f"组别:    {agg['group']}  |  批次: {agg['batch_id']}  "
         f"|  时间点: {agg['daypoint']}"
     )
     vol = agg.get("volume_mm3")
@@ -218,24 +218,24 @@ def format_aggregate_stats(agg: Dict[str, Any]) -> str:
     n = len(runs)
 
     if n == 1:
-        lines.append(f"仅 1 次运行，无聚合标准差。")
+        lines.append("仅 1 次运行，无聚合标准差。")
         lines.append("")
     else:
-        lines.append(f"基于 {n} 次骨架化运行的统计：")
+        lines.append(f"基于 {n} 次独立骨架化与统计结果汇总：")
         lines.append("")
 
     # 逐次运行明细表
     header = (
-        f"  {'运行':<32s} | {'采样':>4s} | {'段数':>5s} "
+        f"  {'':<10s} | {'采样':>4s} | {'段数':>5s} "
         f"| {'直径(μm)':>10s} | {'长度(μm)':>10s} "
         f"| {'弯曲度':>8s}"
     )
     lines.append(header)
     lines.append("  " + "-" * (len(header) - 2))
-    for r in runs:
-        run_short = r["run_id"][:28] if len(r["run_id"]) > 28 else r["run_id"]
+    for i, r in enumerate(runs, start=1):
+        label = f"运行 #{i}"
         lines.append(
-            f"  {run_short:<32s} | {str(r['sampling']):>4s} "
+            f"  {label:<10s} | {str(r['sampling']):>4s} "
             f"| {r.get('segment_count', '?'):>5} "
             f"| {r.get('avg_diameter_um', 0):>10.2f} "
             f"| {r.get('avg_length_um', 0):>10.2f} "
@@ -289,11 +289,14 @@ def format_aggregate_stats(agg: Dict[str, Any]) -> str:
 
     # 脚注
     lines.append(sep)
-    lines.append(f"生成: {agg['generated_at']}")
     if n >= 2:
         lines.append(
-            "方法: 每个 run 的 C++ 统计值（平均直径 / 平均长度 / 段密度 / "
-            "平均弯曲度）取均值 ± 样本标准差。"
+            "方法: 各次运行统计值（平均直径 / 平均长度 / 段密度 / "
+            "平均弯曲度）取均值 ± 样本标准差（n=" + str(n) + "）。"
+        )
+    else:
+        lines.append(
+            "方法: 单次运行统计值。多次运行后重新运行 aggregate-stats 将自动计算均值 ± 标准差。"
         )
     lines.append(sep)
 
