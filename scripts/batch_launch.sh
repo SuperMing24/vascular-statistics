@@ -92,10 +92,10 @@ while [[ $# -gt 0 ]]; do
             echo "  --output-root, -o <dir> 输出根目录"
             echo "  --sampling, -s <float>  稀疏采样率（默认 1.0）"
             echo "  --phases <phase>       执行阶段: all|skeletonize|stats（默认 all）"
-            echo "  --resume, -r            跳过已完成的样本（读取 manifest.json）"
-            echo "  --min-skeletons <N>     跳过已有 >= N 个有效骨架的样本（从磁盘扫描）"
-            echo "  --max-skeletons <N>     跳过已有 >= N 个有效骨架的样本（0 = 全部提交）"
-            echo "  --count-skeletons       仅统计各样本已有骨架数，不提交"
+            echo "  --resume, -r            跳过 manifest 中已完成全流程的样本（适用于 --phases all）"
+            echo "  --min-skeletons <N>     跳过已有 >= N 个 .pajek 的样本（磁盘扫描，适用于 --phases skeletonize）"
+            echo "  --max-skeletons <N>     跳过已有 >= N 个 .pajek 的样本（0 = 全部提交）"
+            echo "  --count-skeletons       仅统计各样本已有 .pajek 数，不提交"
             echo "  --dry                   仅预览，不提交"
             echo ""
             echo "--files-from 文件格式:"
@@ -105,8 +105,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [ -z "$VOLUME" ]; then
-    echo "FATAL: 必须指定 --volume (组织体积 mm^3)"
+if [ "$PHASES" != "skeletonize" ] && [ -z "$VOLUME" ]; then
+    echo "FATAL: 必须指定 --volume (组织体积 mm^3)。骨架化阶段不需要，可传 0 或省略。"
     exit 1
 fi
 
@@ -169,9 +169,15 @@ fi
 
 echo "找到 ${#FILES[@]} 个文件"
 
-# --- 恢复模式：过滤已完成样本 ---
+# --- 恢复模式：过滤已完成样本（仅全流程阶段有意义） ---
 SKIPPED_COUNT=0
 SKEL_SKIPPED=0
+if [ "$RESUME" = true ] && [ "$PHASES" = "skeletonize" ]; then
+    echo "Note: --phases skeletonize 下 --resume 无意义（manifest 记录的是全流程完成状态），自动跳过。"
+    echo "      使用 --min-skeletons / --count-skeletons 检查骨架完成情况。"
+    echo ""
+    RESUME=false
+fi
 if [ "$RESUME" = true ]; then
     MANIFEST_PATH="$OUTPUT_ROOT/manifest.json"
     if [ -f "$MANIFEST_PATH" ]; then
