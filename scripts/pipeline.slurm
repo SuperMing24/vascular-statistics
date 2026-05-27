@@ -207,6 +207,18 @@ echo "Sample dir : $SAMPLE_DIR"
 echo "Output dir : $JOB_OUTDIR"
 echo ""
 
+# --- 初始化 conda 环境（必须在任何依赖 vascstats 包的 Python 调用之前） ---
+set +u
+source ~/.bashrc
+set -u
+
+# 尝试 vascstats 环境，若不存在则回退到 vesseg
+if conda env list 2>/dev/null | grep -q "vascstats"; then
+    conda activate vascstats
+else
+    conda activate /share/home/sukm/conda_envs/vesseg
+fi
+
 # --- 向 manifest.json 注册作业开始 ---
 # 注意：不能直接用 | sed → pipefail 下 Python 失败也会被 sed 的 exit 0 掩盖。
 # 使用 PIPESTATUS 捕获 Python 真实退出码。
@@ -231,18 +243,6 @@ if [ $MANIFEST_RC -ne 0 ]; then
 fi
 
 echo ""
-
-# --- 初始化 conda 环境 ---
-set +u
-source ~/.bashrc
-set -u
-
-# 尝试 vascstats 环境，若不存在则回退到 vesseg
-if conda env list 2>/dev/null | grep -q "vascstats"; then
-    conda activate vascstats
-else
-    conda activate /share/home/sukm/conda_envs/vesseg
-fi
 
 # --- 环境验证 ---
 echo "--- Environment Check ---"
