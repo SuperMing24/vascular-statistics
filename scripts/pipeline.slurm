@@ -328,11 +328,14 @@ cd "$JOB_OUTDIR"
 PIPE_CMD=(
     python -m vascular_statistics.cli
     pipeline "$FULL_INPUT"
-    --volume "$VOLUME"
     --output-stem "$OUTPUT_STEM"
     --sampling "$SAMPLING"
     --phases "$PHASES"
 )
+# --volume 可选：仅在明确传入时追加，否则由 CLI 从样本元数据自动查找
+if [ -n "$VOLUME" ]; then
+    PIPE_CMD+=(--volume "$VOLUME")
+fi
 
 echo "Command: ${PIPE_CMD[*]}"
 echo ""

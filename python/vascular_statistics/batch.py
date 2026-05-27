@@ -461,6 +461,49 @@ def filter_by_skeleton_count(
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Volume 自动解析（从样本元数据查找）
+# ═══════════════════════════════════════════════════════════════════════
+
+def resolve_volume(
+    sample_key: str,
+    output_root: str,
+    cli_volume: float | None = None,
+) -> float | None:
+    """查找样本的组织体积 (mm^3)。
+
+    优先级：
+      1. cli_volume（CLI --volume 显式传入）—— 最高优先级
+      2. $OUTPUT_ROOT/{sample_key}/sample_metadata.json → spatial.tissue_volume_mm3
+      3. 返回 None（调用方应报错提示先运行 extract-metadata）
+
+    参数：
+        sample_key: compute_sample_key 输出。
+        output_root: 输出根目录。
+        cli_volume: CLI 显式传入的 volume 值（None = 未传）。
+
+    返回：
+        组织体积 mm^3，或 None 表示无法确定。
+    """
+    # 1. CLI 显式传入
+    if cli_volume is not None:
+        return float(cli_volume)
+
+    # 2. 从 sample_metadata.json 查找
+    meta_path = os.path.join(output_root, sample_key, "sample_metadata.json")
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            vol = meta.get("spatial", {}).get("tissue_volume_mm3")
+            if vol is not None:
+                return float(vol)
+        except (json.JSONDecodeError, OSError, ValueError, KeyError):
+            pass
+
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # 批量处理（保留原有功能）
 # ═══════════════════════════════════════════════════════════════════════
 

@@ -106,8 +106,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ "$PHASES" != "skeletonize" ] && [ -z "$VOLUME" ]; then
-    echo "FATAL: 必须指定 --volume (组织体积 mm^3)。骨架化阶段不需要，可传 0 或省略。"
-    exit 1
+    echo "Note: --volume 未指定，将由管线从 sample_metadata.json 自动查找。"
+    echo "      如样本元数据未提取，请先运行 extract-metadata。"
+    echo ""
 fi
 
 # --- 查找输入文件 ---

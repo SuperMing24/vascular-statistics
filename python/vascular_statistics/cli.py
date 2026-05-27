@@ -16,6 +16,26 @@ import sys
 import click
 
 
+def _resolve_volume_from_cwd() -> float | None:
+    """从 CWD 向上查找 sample_metadata.json，读取 tissue_volume_mm3。"""
+    import json as _json
+    cwd = os.getcwd()
+    # 尝试从当前目录向上最多 3 层查找 sample_metadata.json
+    for _ in range(4):
+        candidate = os.path.join(cwd, "sample_metadata.json")
+        if os.path.exists(candidate):
+            with open(candidate, "r", encoding="utf-8") as f:
+                meta = _json.load(f)
+            vol = meta.get("spatial", {}).get("tissue_volume_mm3")
+            if vol is not None:
+                return float(vol)
+        parent = os.path.dirname(cwd)
+        if parent == cwd:
+            break
+        cwd = parent
+    return None
+
+
 @click.group()
 @click.version_option(version="0.1.0")
 def main():
@@ -48,8 +68,8 @@ def convert(pajek, output_dir):
 @main.command()
 @click.argument("stem")
 @click.option(
-    "--volume", "-v", type=float, required=True,
-    help="组织体积 (mm^3)",
+    "--volume", "-v", type=float, default=None,
+    help="组织体积 (mm^3)。不提供则从 sample_metadata.json 自动查找。",
 )
 @click.option(
     "--exe", type=click.Path(exists=True),
@@ -119,7 +139,7 @@ def skeletonize(input, output, sampling, speed, dist, med):
         click.echo("不支持的输入格式。请使用 .mat 或 .tif 文件。", err=True)
         raise click.Abort()
 
-    click.echo(f"已加载分割: {stack.shape}, 前景体素数: {stack.sum()}")
+    click.echo(f"已加载分割: {stack.shape}, 前景体素数: {(stack > 0).sum()}")
 
     # 骨架化
     sk = Skeleton(
@@ -141,7 +161,7 @@ def skeletonize(input, output, sampling, speed, dist, med):
 
 @main.command()
 @click.argument("input", type=click.Path(exists=True))
-@click.option("--volume", "-v", type=float, required=True, help="组织体积 (mm^3)")
+@click.option("--volume", "-v", type=float, default=None, help="组织体积 (mm^3)。不提供则从样本元数据自动查找。")
 @click.option("--output-stem", "-o", default=None, help="输出文件前缀")
 @click.option("--sampling", "-s", type=float, default=1.0, help="稀疏采样率 (1.0=最密, 2.0=快速)")
 @click.option(
@@ -182,7 +202,7 @@ def pipeline(input, volume, output_stem, phases, sampling):
             click.echo("不支持的输入格式。请使用 .mat 或 .tif 文件。", err=True)
             raise click.Abort()
 
-        voxel_count = int(stack.sum())
+        voxel_count = int((stack > 0).sum())
         click.echo(f"已加载分割: {stack.shape}, 前景体素数: {voxel_count}")
 
         sk = Skeleton(label=stack, sampling=sampling,
@@ -244,6 +264,17 @@ def pipeline(input, volume, output_stem, phases, sampling):
             err=True,
         )
         raise click.Abort()
+
+    # --- Volume 自动解析 ---
+    if volume is None:
+        volume = _resolve_volume_from_cwd()
+    if volume is None:
+        click.echo(
+            "无法确定组织体积。请提供 --volume 或先运行 extract-metadata。",
+            err=True,
+        )
+        raise click.Abort()
+    click.echo(f"体积: {volume} mm^3")
 
     cmd = [exe, output_stem + "_edges", output_stem + "_vertices", str(volume)]
     click.echo(f"执行: {' '.join(cmd)}")
@@ -395,6 +426,47 @@ def status_cmd(manifest, failed_only, pending_only):
                 click.echo(f"  [{st:11s}] {key}  ({runs} runs)")
         else:
             click.echo("All samples completed.")
+
+
+@main.command("extract-metadata")
+@click.option("--data-root", type=click.Path(exists=True), required=True,
+              help="数据集根目录（含 .mat 文件）")
+@click.option("--output-root", type=click.Path(), required=True,
+              help="输出根目录（样本元数据写入此处）")
+@click.option("--voxel-spacing-config", type=click.Path(exists=True), default=None,
+              help="voxel_spacing.json 路径（可选，无则跳过 volume 计算）")
+@click.option("--regen", is_flag=True,
+              help="重新提取已存在的样本元数据")
+@click.option("--glob", "glob_pattern", default="**/angiogram_crop_*.mat",
+              help=".mat 文件匹配模式（默认 **/angiogram_crop_*.mat）")
+def extract_metadata_cmd(data_root, output_root, voxel_spacing_config,
+                         regen, glob_pattern):
+    """从数据集 .mat 文件中提取每个样本的元数据。
+
+    对每个 angiogram_crop_*.mat 文件：
+      1. 解析路径 → group / animal_id / daypoint / z_range
+      2. 加载 .mat → stack shape / foreground_voxel_count / rect_position
+      3. 查找体素间距配置 → 计算 tissue_volume_mm3
+      4. 写入 $OUTPUT_ROOT/{sample_key}/sample_metadata.json
+
+    同时生成全局导航目录：
+      $DATASET_ROOT/sample_catalog.json
+    """
+    from vascular_statistics.extract_metadata import run_extraction
+
+    result = run_extraction(
+        data_root=data_root,
+        output_root=output_root,
+        voxel_spacing_config_path=voxel_spacing_config,
+        regen=regen,
+        glob_pattern=glob_pattern,
+    )
+
+    click.echo()
+    click.echo(f"已处理: {result['processed']}, "
+               f"跳过: {result['skipped']}, "
+               f"失败: {result['failed']}")
+    click.echo(f"全局目录: {result['catalog_path']}")
 
 
 if __name__ == "__main__":
