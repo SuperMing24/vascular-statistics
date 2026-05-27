@@ -70,7 +70,8 @@
 #
 #   内存：48 GB（典型样本 ~8-16 GB，大 3D 堆栈 ~32 GB，保留 50% 余量）
 #
-#   时限：4 小时（典型 0.5-2h。短时限 = 更高回填优先级 = 更快调度）
+#   时限：1 天（实测采样=1.0 时骨架化需 3-8h，1 天提供充足余量；
+#     compute 分区 MaxTime=7 天，1 天不影响回填优先级。）
 #
 #   分区：compute（优先）
 #     推测为双路服务器（96 核无法来自单 CPU）→ 双内存控制器 → 双倍带宽。
@@ -90,7 +91,7 @@
 #SBATCH --mem=48G
 #SBATCH --ntasks=1
 
-#SBATCH --time=04:00:00
+#SBATCH --time=1-00:00:00
 #SBATCH --requeue
 #SBATCH --signal=B:SIGTERM@120
 

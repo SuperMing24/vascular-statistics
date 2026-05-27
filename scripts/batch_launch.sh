@@ -47,6 +47,9 @@ PHASES="all"
 RESUME=false
 FILES_FROM=""
 SLURM_SCRIPT="scripts/pipeline.slurm"
+MIN_SKELETONS=0
+MAX_SKELETONS=-1
+COUNT_ONLY=false
 
 # --- 解析参数 ---
 while [[ $# -gt 0 ]]; do
@@ -69,6 +72,12 @@ while [[ $# -gt 0 ]]; do
             DRY=true; shift ;;
         --resume|-r)
             RESUME=true; shift ;;
+        --min-skeletons)
+            MIN_SKELETONS="$2"; shift 2 ;;
+        --max-skeletons)
+            MAX_SKELETONS="$2"; shift 2 ;;
+        --count-skeletons)
+            COUNT_ONLY=true; shift ;;
         *)
             echo "Unknown option: $1"
             echo "用法: bash scripts/batch_launch.sh --volume <mm^3> [选项]"
@@ -84,6 +93,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --sampling, -s <float>  稀疏采样率（默认 1.0）"
             echo "  --phases <phase>       执行阶段: all|skeletonize|stats（默认 all）"
             echo "  --resume, -r            跳过已完成的样本（读取 manifest.json）"
+            echo "  --min-skeletons <N>     跳过已有 >= N 个有效骨架的样本（从磁盘扫描）"
+            echo "  --max-skeletons <N>     跳过已有 >= N 个有效骨架的样本（0 = 全部提交）"
+            echo "  --count-skeletons       仅统计各样本已有骨架数，不提交"
             echo "  --dry                   仅预览，不提交"
             echo ""
             echo "--files-from 文件格式:"
@@ -106,13 +118,16 @@ echo "  Data Root  : $DATA_ROOT"
 echo "  Output Root: $OUTPUT_ROOT"
 echo "  Volume     : $VOLUME mm^3"
 echo "  Sampling   : $SAMPLING"
-echo "  Phases     : $PHASES"
-echo "  Resume     : $RESUME"
-echo "  Dry Run    : $DRY"
+echo "  Phases       : $PHASES"
+echo "  Resume       : $RESUME"
+echo "  Min Skeletons: $MIN_SKELETONS"
+echo "  Max Skeletons: $MAX_SKELETONS"
+echo "  Count Only   : $COUNT_ONLY"
+echo "  Dry Run      : $DRY"
 if [ -n "$FILES_FROM" ]; then
-    echo "  Files From : $FILES_FROM"
+    echo "  Files From   : $FILES_FROM"
 else
-    echo "  Pattern    : $PATTERN"
+    echo "  Pattern      : $PATTERN"
 fi
 echo "=========================================="
 echo ""
@@ -156,6 +171,7 @@ echo "找到 ${#FILES[@]} 个文件"
 
 # --- 恢复模式：过滤已完成样本 ---
 SKIPPED_COUNT=0
+SKEL_SKIPPED=0
 if [ "$RESUME" = true ]; then
     MANIFEST_PATH="$OUTPUT_ROOT/manifest.json"
     if [ -f "$MANIFEST_PATH" ]; then
@@ -182,14 +198,86 @@ for f in result:
     fi
 fi
 
+# --- 骨架数过滤：基于磁盘实际 .pajek 文件计数 ---
+if [ "$MIN_SKELETONS" -gt 0 ] || [ "$MAX_SKELETONS" -ge 0 ] || [ "$COUNT_ONLY" = true ]; then
+    echo "扫描已有骨架..."
+    # 通过 Python filter_by_skeleton_count 过滤
+    FILTER_OUTPUT=$(python -c "
+import sys
+sys.path.insert(0, '$PROJECT_DIR/python')
+from vascular_statistics.batch import filter_by_skeleton_count
+
+files = [line.strip() for line in sys.stdin if line.strip()]
+to_submit, skipped, counts = filter_by_skeleton_count(
+    files,
+    '$DATA_ROOT',
+    '$OUTPUT_ROOT',
+    min_skeletons=$MIN_SKELETONS,
+    max_skeletons=$MAX_SKELETONS,
+)
+
+# 输出计数摘要（stderr 以避免混入文件列表）
+import json
+summary = {
+    'total': len(files),
+    'to_submit': len(to_submit),
+    'skipped': len(skipped),
+    'counts': counts,
+}
+print(json.dumps(summary), file=sys.stderr)
+
+# 输出待提交文件列表（stdout）
+for f in to_submit:
+    print(f)
+" <<< "$(printf '%s\n' "${FILES[@]}")" 2>&1 1>/tmp/vascstats_skeleton_filter.txt)
+    # Python stderr → summary JSON; stdout → file list
+    FILTER_SUMMARY=$(echo "$FILTER_OUTPUT" | tail -1)
+    readarray -t FILTERED_FILES < /tmp/vascstats_skeleton_filter.txt
+    rm -f /tmp/vascstats_skeleton_filter.txt
+
+    SKEL_SKIPPED=$(echo "$FILTER_SUMMARY" | python -c "import json,sys; d=json.load(sys.stdin); print(d['skipped'])")
+    echo "  总样本: $(echo "$FILTER_SUMMARY" | python -c "import json,sys; d=json.load(sys.stdin); print(d['total'])")"
+    echo "  需提交: $(echo "$FILTER_SUMMARY" | python -c "import json,sys; d=json.load(sys.stdin); print(d['to_submit'])")"
+    echo "  已跳过: $SKEL_SKIPPED (骨架数已达阈值)"
+    echo ""
+
+    # 显示各样本骨架计数（分组汇总）
+    python -c "
+import json, sys
+summary = json.loads('''$FILTER_SUMMARY''')
+counts = summary['counts']
+# 按组输出
+from collections import defaultdict
+by_group = defaultdict(list)
+for k, n in counts.items():
+    group = k.split('/')[0]
+    by_group[group].append((k, n))
+for group in sorted(by_group):
+    samples = by_group[group]
+    n0 = sum(1 for _, n in samples if n == 0)
+    n1 = sum(1 for _, n in samples if n == 1)
+    n2p = sum(1 for _, n in samples if n >= 2)
+    print(f'  {group}: 0骨架={n0}, 1骨架={n1}, ≥2骨架={n2p}')
+"
+
+    FILES=("${FILTERED_FILES[@]}")
+
+    if [ "$COUNT_ONLY" = true ]; then
+        echo ""
+        echo "[COUNT ONLY] 仅统计，不提交。移除 --count-skeletons 以实际提交。"
+        exit 0
+    fi
+fi
+
 if [ ${#FILES[@]} -eq 0 ]; then
-    echo "无待处理文件。所有样本均已完成。"
+    echo "无待处理文件。所有样本均已完成或已达骨架数阈值。"
     exit 0
 fi
 
 # 列出待处理文件
 echo ""
-echo "待处理 ${#FILES[@]} 个文件 (跳过 $SKIPPED_COUNT):"
+TOTAL_SKIPPED=$((SKIPPED_COUNT + SKEL_SKIPPED))
+echo "待处理 ${#FILES[@]} 个文件 (跳过 $TOTAL_SKIPPED: resume=$SKIPPED_COUNT, skeleton=$SKEL_SKIPPED):"
 for f in "${FILES[@]}"; do
     echo "  $f"
 done
@@ -272,7 +360,7 @@ done
 echo ""
 echo "=========================================="
 echo "  提交完成: ${#JOB_IDS[@]}/${#FILES[@]} 个作业"
-echo "  跳过    : $SKIPPED_COUNT 个已完成"
+echo "  跳过    : $TOTAL_SKIPPED 个 (resume=$SKIPPED_COUNT, skeleton=$SKEL_SKIPPED)"
 echo "  日志    : $SUBMIT_LOG"
 echo "  进度    : python -m vascular_statistics.cli status --manifest $OUTPUT_ROOT/manifest.json"
 echo "  监控    : squeue -u $USER -n 'vs_*'"
@@ -285,6 +373,9 @@ echo "=========================================="
     echo "Sampling: $SAMPLING"
     echo "Phases: $PHASES"
     echo "Resume: $RESUME"
+    echo "MinSkeletons: $MIN_SKELETONS"
+    echo "MaxSkeletons: $MAX_SKELETONS"
+    echo "Skipped: resume=$SKIPPED_COUNT, skeleton=$SKEL_SKIPPED"
     echo "Files (${#FILES[@]}):"
     for i in "${!FILES[@]}"; do
         echo "  ${JOB_IDS[$i]:-FAIL}  ${FILES[$i]}"

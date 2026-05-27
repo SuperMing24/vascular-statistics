@@ -5,10 +5,12 @@
 
 import json
 import os
+import fcntl
+import tempfile
 import glob
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 输出目录结构：阶段指示目录（在 sample_key 计算中被过滤）
@@ -93,14 +95,36 @@ def load_manifest(manifest_path: str) -> dict:
     }
 
 
+def _save_manifest_locked(manifest: dict, manifest_path: str) -> None:
+    """将 manifest 原子写入磁盘（调用方已持有文件锁）。"""
+    parent = os.path.dirname(manifest_path)
+    manifest["updated"] = datetime.now(timezone(timedelta(hours=8))).isoformat()
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=parent or ".", prefix=".manifest_tmp_", suffix=".json"
+    )
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as tmp:
+            json.dump(manifest, tmp, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, manifest_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
 def save_manifest(manifest: dict, manifest_path: str) -> None:
-    """将 manifest 字典写入磁盘 JSON 文件。"""
+    """将 manifest 字典原子写入磁盘 JSON 文件（含文件锁防并发损坏）。"""
     parent = os.path.dirname(manifest_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    manifest["updated"] = datetime.now(timezone(timedelta(hours=8))).isoformat()
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+    lock_path = manifest_path + ".lock"
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_WRONLY | os.O_CLOEXEC)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        _save_manifest_locked(manifest, manifest_path)
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
 
 
 def update_manifest(
@@ -123,6 +147,9 @@ def update_manifest(
     由 ``pipeline.slurm`` 在作业开始/结束时调用，
     或由 ``batch_launch.sh`` 在提交前写入 pending 条目。
 
+    并发安全：通过 fcntl 文件锁保护读-改-写全过程，
+    锁内重新加载 manifest 避免 TOCTOU 丢失更新。
+
     参数：
         manifest_path: manifest.json 的完整路径。
         sample_key: 样本键（compute_sample_key 输出）。
@@ -137,87 +164,154 @@ def update_manifest(
         node: 计算节点名。
         commit: 代码 commit hash。
     """
-    manifest = load_manifest(manifest_path)
-    samples: dict = manifest.setdefault("samples", {})
+    # 无 run_id / status 且条目已存在 → 快速路径，不加锁
+    if (not run_id or not status) and os.path.exists(manifest_path):
+        manifest = load_manifest(manifest_path)
+        samples: dict = manifest.setdefault("samples", {})
+        if sample_key in samples:
+            return
+        # 新样本需要注册 → 走加锁路径
 
-    # 为新样本创建条目
-    if sample_key not in samples:
-        samples[sample_key] = {
-            "input_path": input_path,
-            "first_seen": start_time or datetime.now(timezone(timedelta(hours=8))).isoformat(),
-            "total_runs": 0,
-            "completed_runs": 0,
-            "failed_runs": 0,
-            "latest_run": None,
-            "latest_status": "pending",
-            "runs": [],
-        }
+    # 锁内：重新加载 → 修改 → 原子写入
+    lock_path = manifest_path + ".lock"
+    parent = os.path.dirname(manifest_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_WRONLY | os.O_CLOEXEC)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        # 锁内重新加载，获取最新状态
+        manifest = load_manifest(manifest_path)
+        samples = manifest.setdefault("samples", {})
 
-    entry = samples[sample_key]
+        # 为新样本创建条目
+        if sample_key not in samples:
+            samples[sample_key] = {
+                "input_path": input_path,
+                "first_seen": start_time or datetime.now(
+                    timezone(timedelta(hours=8))
+                ).isoformat(),
+                "total_runs": 0,
+                "completed_runs": 0,
+                "failed_runs": 0,
+                "latest_run": None,
+                "latest_status": "pending",
+                "runs": [],
+            }
 
-    # 无 run_id / status 的调用（如仅注册样本）→ 仅确保条目存在
-    if not run_id or not status:
-        save_manifest(manifest, manifest_path)
-        return
+        entry = samples[sample_key]
 
-    if status == "running":
-        # 作业开始时追加新 run 记录
-        run_record: dict = {
-            "run_id": run_id,
-            "job_id": job_id,
-            "status": "running",
-            "start_time": start_time,
-            "exit_code": None,
-            "duration_seconds": None,
-            "node": node,
-            "commit": commit,
-        }
-        entry["runs"].append(run_record)
-        entry["total_runs"] = len(entry["runs"])
-        entry["latest_run"] = run_id
-        entry["latest_status"] = "running"
-    else:
-        # 作业结束时更新匹配 run_id 的记录
-        for run in reversed(entry["runs"]):
-            if run.get("run_id") == run_id:
-                run["status"] = status
-                run["exit_code"] = exit_code
-                run["end_time"] = end_time
+        # 仅注册样本存在（无 run_id / status）→ 返回
+        if not run_id or not status:
+            _save_manifest_locked(manifest, manifest_path)
+            return
+
+        if status == "running":
+            # 作业开始时追加新 run 记录
+            run_record: dict = {
+                "run_id": run_id,
+                "job_id": job_id,
+                "status": "running",
+                "start_time": start_time,
+                "exit_code": None,
+                "duration_seconds": None,
+                "node": node,
+                "commit": commit,
+            }
+            entry["runs"].append(run_record)
+            entry["total_runs"] = len(entry["runs"])
+            entry["latest_run"] = run_id
+            entry["latest_status"] = "running"
+        else:
+            # 作业结束时更新匹配 run_id 的记录
+            run_matched = False
+            for run in reversed(entry["runs"]):
+                if run.get("run_id") == run_id:
+                    run["status"] = status
+                    run["exit_code"] = exit_code
+                    run["end_time"] = end_time
+                    if start_time and end_time:
+                        try:
+                            st = datetime.fromisoformat(start_time)
+                            et = datetime.fromisoformat(end_time)
+                            run["duration_seconds"] = round(
+                                (et - st).total_seconds()
+                            )
+                        except (ValueError, TypeError):
+                            pass
+                    run_matched = True
+                    break
+
+            if run_matched:
+                # 仅在 run 匹配成功时更新样本级统计
+                entry["latest_status"] = status
+                entry["latest_run"] = run_id
+                if status == "completed":
+                    completed = sum(
+                        1 for r in entry["runs"] if r.get("status") == "completed"
+                    )
+                    entry["completed_runs"] = completed
+                elif status == "failed":
+                    failed = sum(
+                        1 for r in entry["runs"] if r.get("status") == "failed"
+                    )
+                    entry["failed_runs"] = failed
+            else:
+                # run_id 未匹配：可能 start-time 记录丢失，追加新记录
+                fallback_record: dict = {
+                    "run_id": run_id,
+                    "job_id": job_id,
+                    "status": status,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "exit_code": exit_code,
+                    "duration_seconds": None,
+                    "node": node,
+                    "commit": commit,
+                }
                 if start_time and end_time:
                     try:
                         st = datetime.fromisoformat(start_time)
                         et = datetime.fromisoformat(end_time)
-                        run["duration_seconds"] = round((et - st).total_seconds())
+                        fallback_record["duration_seconds"] = round(
+                            (et - st).total_seconds()
+                        )
                     except (ValueError, TypeError):
                         pass
-                break
+                entry["runs"].append(fallback_record)
+                entry["total_runs"] = len(entry["runs"])
+                entry["latest_run"] = run_id
+                entry["latest_status"] = status
+                if status == "completed":
+                    completed = sum(
+                        1 for r in entry["runs"] if r.get("status") == "completed"
+                    )
+                    entry["completed_runs"] = completed
+                elif status == "failed":
+                    failed = sum(
+                        1 for r in entry["runs"] if r.get("status") == "failed"
+                    )
+                    entry["failed_runs"] = failed
 
-        # 更新样本级统计
-        entry["latest_status"] = status
-        if status == "completed":
-            # completed_runs: 避免重复累加（重跑同一 run 完成后多次调用）
-            completed = sum(1 for r in entry["runs"] if r.get("status") == "completed")
-            entry["completed_runs"] = completed
-        elif status == "failed":
-            failed = sum(1 for r in entry["runs"] if r.get("status") == "failed")
-            entry["failed_runs"] = failed
+        # 重算全局统计（遍历全部样本确保准确）
+        all_samples = list(samples.values())
+        stats = manifest.setdefault("stats", {})
+        stats["total_samples"] = len(all_samples)
+        stats["completed_samples"] = sum(
+            1 for s in all_samples if s.get("latest_status") == "completed"
+        )
+        stats["failed_samples"] = sum(
+            1 for s in all_samples if s.get("latest_status") == "failed"
+        )
+        stats["pending_samples"] = sum(
+            1 for s in all_samples
+            if s.get("latest_status") in ("pending", "running", None)
+        )
 
-    # 重算全局统计（遍历全部样本确保准确）
-    all_samples = list(samples.values())
-    stats: dict = manifest.setdefault("stats", {})
-    stats["total_samples"] = len(all_samples)
-    stats["completed_samples"] = sum(
-        1 for s in all_samples if s.get("latest_status") == "completed"
-    )
-    stats["failed_samples"] = sum(
-        1 for s in all_samples if s.get("latest_status") == "failed"
-    )
-    stats["pending_samples"] = sum(
-        1 for s in all_samples
-        if s.get("latest_status") in ("pending", "running", None)
-    )
-
-    save_manifest(manifest, manifest_path)
+        _save_manifest_locked(manifest, manifest_path)
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
 
 
 def filter_pending(
@@ -259,6 +353,89 @@ def filter_pending(
             pending.append(fpath)
 
     return pending
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 骨架计数（从磁盘实际输出统计，不依赖 manifest）
+# ═══════════════════════════════════════════════════════════════════════
+
+def count_sample_skeletons(
+    sample_key: str,
+    output_root: str,
+) -> int:
+    """扫描输出目录，统计某样本已有多少个有效骨架（pajek 文件）。
+
+    有效骨架 = run_* 目录中含 .pajek 文件。
+
+    参数：
+        sample_key: compute_sample_key 输出。
+        output_root: 输出根目录。
+
+    返回：
+        该样本已有的有效骨架数。
+    """
+    sample_dir = os.path.join(output_root, sample_key)
+    if not os.path.isdir(sample_dir):
+        return 0
+
+    count = 0
+    for run_name in os.listdir(sample_dir):
+        run_path = os.path.join(sample_dir, run_name)
+        if not run_name.startswith("run_") or not os.path.isdir(run_path):
+            continue
+        if any(f.endswith(".pajek") for f in os.listdir(run_path)):
+            count += 1
+    return count
+
+
+def filter_by_skeleton_count(
+    input_files: List[str],
+    data_root: str,
+    output_root: str,
+    *,
+    min_skeletons: int = 0,
+    max_skeletons: int = -1,
+) -> Tuple[List[str], List[str], dict]:
+    """按有效骨架数过滤输入文件。
+
+    不从 manifest 读取（避免依赖损坏数据），直接从磁盘 run_* 目录扫描。
+
+    参数：
+        input_files: 输入文件的绝对路径列表。
+        data_root: 数据根目录。
+        output_root: 输出根目录。
+        min_skeletons: 已有 >= 此数量的样本将被跳过（默认 0 = 不过滤）。
+        max_skeletons: 已有 >= 此数量的样本将被跳过（-1 = 无上限）。
+
+    返回：
+        (to_submit, skipped, counts) —
+        to_submit: 需要提交的文件列表。
+        skipped: 已跳过的文件列表。
+        counts: {sample_key: skeleton_count} 全部样本的骨架计数。
+    """
+    to_submit: List[str] = []
+    skipped: List[str] = []
+    counts: dict = {}
+
+    for fpath in input_files:
+        try:
+            rel = os.path.relpath(fpath, data_root)
+        except ValueError:
+            # 无法计算相对路径 → 保留
+            to_submit.append(fpath)
+            continue
+        key = compute_sample_key(rel)
+        n = count_sample_skeletons(key, output_root)
+        counts[key] = n
+
+        if min_skeletons > 0 and n >= min_skeletons:
+            skipped.append(fpath)
+        elif max_skeletons >= 0 and n >= max_skeletons:
+            skipped.append(fpath)
+        else:
+            to_submit.append(fpath)
+
+    return to_submit, skipped, counts
 
 
 # ═══════════════════════════════════════════════════════════════════════
