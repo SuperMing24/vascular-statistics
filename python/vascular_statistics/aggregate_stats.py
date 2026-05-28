@@ -39,7 +39,7 @@ def parse_run_statistics(run_dir: str) -> Optional[Dict[str, Any]]:
         with open(stats_path, "r", encoding="utf-8") as f:
             for line in f:
                 m = re.match(
-                    r"^(平均直径|平均长度|段密度|平均弯曲度)\s*[\(（].*[\)）]\s*:\s*([\d.]+)",
+                    r"^(平均直径|平均长度|段密度|平均弯曲度)\s*[\(（].*[\)）]\s*:\s*([\d.]+|inf|nan|-inf)",
                     line,
                 )
                 if m:
@@ -217,74 +217,95 @@ def format_aggregate_stats(agg: Dict[str, Any]) -> str:
     runs = agg["runs"]
     n = len(runs)
 
-    if n == 1:
-        lines.append("仅 1 次运行，无聚合标准差。")
-        lines.append("")
-    else:
-        lines.append(f"基于 {n} 次独立骨架化与统计结果汇总：")
-        lines.append("")
-
     # 逐次运行明细表
-    header = (
+    run_header = (
         f"  {'':<10s} | {'采样':>4s} | {'段数':>5s} "
         f"| {'直径(μm)':>10s} | {'长度(μm)':>10s} "
         f"| {'弯曲度':>8s}"
     )
-    lines.append(header)
-    lines.append("  " + "-" * (len(header) - 2))
+    lines.append(run_header)
+    lines.append("  " + "-" * (len(run_header) - 2))
     for i, r in enumerate(runs, start=1):
         label = f"运行 #{i}"
+        tort = r.get('avg_tortuosity_au', 0)
         lines.append(
             f"  {label:<10s} | {str(r['sampling']):>4s} "
             f"| {r.get('segment_count', '?'):>5} "
             f"| {r.get('avg_diameter_um', 0):>10.2f} "
             f"| {r.get('avg_length_um', 0):>10.2f} "
-            f"| {r.get('avg_tortuosity_au', 0):>8.5f}"
+            f"| {tort:>8.5f}"
         )
     lines.append("")
 
-    # 聚合统计表
+    # 统计指标表（n≥2 时含均值/标准差，n=1 时仅展示值）
     aggregates = agg["aggregates"]
+
+    def _fmt(v: float | None) -> str:
+        if v is None:
+            return "       N/A"
+        if v != v:  # NaN
+            return "       N/A"
+        if v == float("inf") or v == float("-inf"):
+            return "       N/A"
+        return f"{v:>10.4f}"
+
     if n >= 2:
-        lines.append(f"均值和标准差（n={n}）：")
+        lines.append(f"基于 {n} 次独立骨架化与统计结果的汇总：")
         lines.append("")
         stat_header = (
             f"  {'统计指标':<28s} | {'均值':>10s} | {'标准差':>10s} "
             f"| {'最小':>10s} | {'最大':>10s}"
         )
-        lines.append(stat_header)
-        lines.append("  " + "-" * (len(stat_header) - 2))
-
-        for key, label, unit in agg["metric_keys"]:
-            entry = aggregates.get(key, {})
-            mean_v = entry.get("mean")
-            stdev_v = entry.get("stdev")
-            min_v = entry.get("min")
-            max_v = entry.get("max")
-
-            if mean_v is None:
-                continue
-
-            label_full = f"{label} ({unit})"
-            if stdev_v is not None:
-                lines.append(
-                    f"  {label_full:<28s} | {mean_v:>10.4f} "
-                    f"| {stdev_v:>10.4f} | {min_v:>10.4f} | {max_v:>10.4f}"
-                )
-            else:
-                lines.append(
-                    f"  {label_full:<28s} | {mean_v:>10.4f} "
-                    f"| {'—':>10s} | {min_v:>10.4f} | {max_v:>10.4f}"
-                )
+    else:
+        lines.append("统计结果（单次运行）：")
         lines.append("")
+        stat_header = f"  {'统计指标':<28s} | {'值':>10s}"
 
-    # 段密度单独说明（依赖 volume）
+    lines.append(stat_header)
+    lines.append("  " + "-" * (len(stat_header) - 2))
+
+    for key, label, unit in agg["metric_keys"]:
+        entry = aggregates.get(key, {})
+        mean_v = entry.get("mean")
+        stdev_v = entry.get("stdev")
+        min_v = entry.get("min")
+        max_v = entry.get("max")
+
+        if mean_v is None:
+            continue
+
+        label_full = f"{label} ({unit})"
+        if n >= 2 and stdev_v is not None:
+            lines.append(
+                f"  {label_full:<28s} | {_fmt(mean_v)} "
+                f"| {_fmt(stdev_v)} | {_fmt(min_v)} | {_fmt(max_v)}"
+            )
+        elif n >= 2:
+            lines.append(
+                f"  {label_full:<28s} | {_fmt(mean_v)} "
+                f"| {'       N/A':>10s} | {_fmt(min_v)} | {_fmt(max_v)}"
+            )
+        else:
+            lines.append(
+                f"  {label_full:<28s} | {_fmt(mean_v)}"
+            )
+    lines.append("")
+
+    # 段密度说明
     density_entry = aggregates.get("segment_density_per_mm3", {})
     if density_entry:
-        lines.append(
-            "注：段密度 = 有效段数 / 组织体积。"
-            "直径 < 10 μm 的微血管段不计入。"
-        )
+        d_mean = density_entry.get("mean")
+        if d_mean is not None and d_mean != d_mean:
+            # NaN density (volume=0 导致)
+            lines.append(
+                "注：段密度 = 有效段数 / 组织体积。"
+                "当前样本 volume 可能未正确设置，导致密度为 N/A。"
+            )
+        else:
+            lines.append(
+                "注：段密度 = 有效段数 / 组织体积。"
+                "直径 < 10 μm 的微血管段不计入。"
+            )
         lines.append("")
 
     # 脚注
@@ -296,7 +317,8 @@ def format_aggregate_stats(agg: Dict[str, Any]) -> str:
         )
     else:
         lines.append(
-            "方法: 单次运行统计值。多次运行后重新运行 aggregate-stats 将自动计算均值 ± 标准差。"
+            "方法: 单次运行统计值。有多次骨架化运行后，重新运行 "
+            "aggregate-stats 将自动计算均值 ± 标准差。"
         )
     lines.append(sep)
 
