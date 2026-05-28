@@ -322,8 +322,32 @@ echo "Input  : $FULL_INPUT"
 echo "Volume : $VOLUME mm^3"
 echo ""
 
+# --- stats-only：从同一样本的历史 run 中查找最新 skeleton.pajek ---
+if [ "$PHASES" = "stats" ]; then
+    SAMPLE_ROOT="$OUTPUT_ROOT/$SAMPLE_DIR"
+    LATEST_PAJEK=$(find "$SAMPLE_ROOT" -name 'skeleton.pajek' -type f 2>/dev/null | sort | tail -1)
+    if [ -z "$LATEST_PAJEK" ]; then
+        echo "FATAL: 该样本无 skeleton.pajek，请先运行骨架化。"
+        python -m vascular_statistics.cli update-manifest \
+            --manifest "$OUTPUT_ROOT/manifest.json" \
+            --sample-key "$SAMPLE_DIR" \
+            --run-id "$RUN_ID" \
+            --status failed \
+            --exit-code 1 \
+            --end-time "$(date -Iseconds)" \
+            2>/dev/null || true
+        exit 1
+    fi
+    echo "Stats source: $LATEST_PAJEK"
+fi
+
 # 切换到输出目录执行（产物集中存放在 run_<ts>/ 下）
 cd "$JOB_OUTDIR"
+
+# stats-only：将最新骨架复制到当前运行目录
+if [ "$PHASES" = "stats" ] && [ -n "$LATEST_PAJEK" ]; then
+    cp "$LATEST_PAJEK" "$JOB_OUTDIR/skeleton.pajek"
+fi
 
 PIPE_CMD=(
     python -m vascular_statistics.cli

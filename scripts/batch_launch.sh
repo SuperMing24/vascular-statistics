@@ -48,6 +48,7 @@ RESUME=false
 FILES_FROM=""
 SLURM_SCRIPT="scripts/pipeline.slurm"
 PARTITION="compute"
+HAS_SKELETON=false
 MIN_SKELETONS=0
 MAX_SKELETONS=-1
 COUNT_ONLY=false
@@ -79,6 +80,8 @@ while [[ $# -gt 0 ]]; do
             MAX_SKELETONS="$2"; shift 2 ;;
         --count-skeletons)
             COUNT_ONLY=true; shift ;;
+        --has-skeleton)
+            HAS_SKELETON=true; shift ;;
         --partition)
             PARTITION="$2"; shift 2 ;;
         *)
@@ -99,6 +102,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --min-skeletons <N>     跳过已有 >= N 个 .pajek 的样本（磁盘扫描，适用于 --phases skeletonize）"
             echo "  --max-skeletons <N>     跳过已有 >= N 个 .pajek 的样本（0 = 全部提交）"
             echo "  --count-skeletons       仅统计各样本已有 .pajek 数，不提交"
+            echo "  --has-skeleton          仅提交已有 ≥1 个骨架的样本（用于 --phases stats）"
             echo "  --partition <name>     Slurm 分区（默认 compute，可选 tao/control/gpu）"
             echo "  --dry                   仅预览，不提交"
             echo ""
@@ -126,6 +130,7 @@ echo "  Sampling   : $SAMPLING"
 echo "  Partition   : $PARTITION"
 echo "  Phases       : $PHASES"
 echo "  Resume       : $RESUME"
+echo "  Has Skeleton : $HAS_SKELETON"
 echo "  Min Skeletons: $MIN_SKELETONS"
 echo "  Max Skeletons: $MAX_SKELETONS"
 echo "  Count Only   : $COUNT_ONLY"
@@ -211,7 +216,7 @@ for f in result:
 fi
 
 # --- 骨架数过滤：基于磁盘实际 .pajek 文件计数 ---
-if [ "$MIN_SKELETONS" -gt 0 ] || [ "$MAX_SKELETONS" -ge 0 ] || [ "$COUNT_ONLY" = true ]; then
+if [ "$MIN_SKELETONS" -gt 0 ] || [ "$MAX_SKELETONS" -ge 0 ] || [ "$HAS_SKELETON" = true ] || [ "$COUNT_ONLY" = true ]; then
     echo "扫描已有骨架..."
     # 通过 Python filter_by_skeleton_count 过滤
     FILTER_OUTPUT=$(python -c "
@@ -226,6 +231,7 @@ to_submit, skipped, counts = filter_by_skeleton_count(
     '$OUTPUT_ROOT',
     min_skeletons=$MIN_SKELETONS,
     max_skeletons=$MAX_SKELETONS,
+    has_skeleton_only=$HAS_SKELETON,
 )
 
 # 输出计数摘要（stderr 以避免混入文件列表）

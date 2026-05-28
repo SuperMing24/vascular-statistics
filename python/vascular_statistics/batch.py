@@ -417,6 +417,7 @@ def filter_by_skeleton_count(
     *,
     min_skeletons: int = 0,
     max_skeletons: int = -1,
+    has_skeleton_only: bool = False,
 ) -> Tuple[List[str], List[str], dict]:
     """按有效骨架数过滤输入文件。
 
@@ -428,6 +429,7 @@ def filter_by_skeleton_count(
         output_root: 输出根目录。
         min_skeletons: 已有 >= 此数量的样本将被跳过（默认 0 = 不过滤）。
         max_skeletons: 已有 >= 此数量的样本将被跳过（-1 = 无上限）。
+        has_skeleton_only: 仅保留已有 >=1 个骨架的样本（用于 stats-only）。
 
     返回：
         (to_submit, skipped, counts) —
@@ -450,7 +452,9 @@ def filter_by_skeleton_count(
         n = count_sample_skeletons(key, output_root)
         counts[key] = n
 
-        if min_skeletons > 0 and n >= min_skeletons:
+        if has_skeleton_only and n == 0:
+            skipped.append(fpath)
+        elif min_skeletons > 0 and n >= min_skeletons:
             skipped.append(fpath)
         elif max_skeletons >= 0 and n >= max_skeletons:
             skipped.append(fpath)
