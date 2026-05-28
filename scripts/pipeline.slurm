@@ -200,8 +200,26 @@ from vascular_statistics.batch import compute_sample_key
 print(compute_sample_key('$REL_INPUT'))
 ")
 
-JOB_OUTDIR="$OUTPUT_ROOT/$SAMPLE_DIR/$RUN_ID"
-mkdir -p "$JOB_OUTDIR" "$PROJECT_DIR/logs"
+# --- 确定输出目录 ---
+# skeletonize / all → 新 run_<ts> 目录；stats → 已有骨架 run 目录（统计从属于骨架）
+if [ "$PHASES" = "stats" ]; then
+    SAMPLE_ROOT="$OUTPUT_ROOT/$SAMPLE_DIR"
+    JOB_OUTDIR=""
+    if [ -d "$SAMPLE_ROOT" ]; then
+        # 找最新含 skeleton.pajek 的 run_* 目录
+        JOB_OUTDIR=$(find "$SAMPLE_ROOT" -name 'skeleton.pajek' -type f 2>/dev/null \
+            | sed 's|/skeleton\.pajek$||' | sort | tail -1)
+    fi
+    if [ -z "$JOB_OUTDIR" ]; then
+        echo "FATAL: 该样本无 skeleton.pajek，请先运行骨架化。"
+        exit 1
+    fi
+    echo "Stats target: $JOB_OUTDIR （写入已有骨架目录，不创建新 run）"
+else
+    JOB_OUTDIR="$OUTPUT_ROOT/$SAMPLE_DIR/$RUN_ID"
+    mkdir -p "$JOB_OUTDIR"
+fi
+mkdir -p "$PROJECT_DIR/logs"
 
 echo "Sample dir : $SAMPLE_DIR"
 echo "Output dir : $JOB_OUTDIR"
@@ -219,27 +237,27 @@ else
     conda activate /share/home/sukm/conda_envs/vesseg
 fi
 
-# --- 向 manifest.json 注册作业开始 ---
-# 注意：不能直接用 | sed → pipefail 下 Python 失败也会被 sed 的 exit 0 掩盖。
-# 使用 PIPESTATUS 捕获 Python 真实退出码。
-set +o pipefail
-MANIFEST_LOG=$(python -m vascular_statistics.cli update-manifest \
-    --manifest "$OUTPUT_ROOT/manifest.json" \
-    --sample-key "$SAMPLE_DIR" \
-    --input-path "$REL_INPUT" \
-    --volume-mm3 "$VOLUME" \
-    --run-id "$RUN_ID" \
-    --job-id "$SLURM_JOB_ID" \
-    --status running \
-    --start-time "$START_TIME" \
-    --node "$SLURM_NODELIST" \
-    --commit "$COMMIT_HASH" \
-    2>&1)
-MANIFEST_RC=$?
-set -o pipefail
-echo "$MANIFEST_LOG" | sed 's/^/  [manifest] /'
-if [ $MANIFEST_RC -ne 0 ]; then
-    echo "  [manifest] WARNING: update-manifest (start) failed (rc=$MANIFEST_RC), continuing..."
+# --- 向 manifest.json 注册作业开始（stats 阶段不注册，统计从属于骨架 run） ---
+if [ "$PHASES" != "stats" ]; then
+    set +o pipefail
+    MANIFEST_LOG=$(python -m vascular_statistics.cli update-manifest \
+        --manifest "$OUTPUT_ROOT/manifest.json" \
+        --sample-key "$SAMPLE_DIR" \
+        --input-path "$REL_INPUT" \
+        --volume-mm3 "$VOLUME" \
+        --run-id "$RUN_ID" \
+        --job-id "$SLURM_JOB_ID" \
+        --status running \
+        --start-time "$START_TIME" \
+        --node "$SLURM_NODELIST" \
+        --commit "$COMMIT_HASH" \
+        2>&1)
+    MANIFEST_RC=$?
+    set -o pipefail
+    echo "$MANIFEST_LOG" | sed 's/^/  [manifest] /'
+    if [ $MANIFEST_RC -ne 0 ]; then
+        echo "  [manifest] WARNING: update-manifest (start) failed (rc=$MANIFEST_RC), continuing..."
+    fi
 fi
 
 echo ""
@@ -322,32 +340,8 @@ echo "Input  : $FULL_INPUT"
 echo "Volume : $VOLUME mm^3"
 echo ""
 
-# --- stats-only：从同一样本的历史 run 中查找最新 skeleton.pajek ---
-if [ "$PHASES" = "stats" ]; then
-    SAMPLE_ROOT="$OUTPUT_ROOT/$SAMPLE_DIR"
-    LATEST_PAJEK=$(find "$SAMPLE_ROOT" -name 'skeleton.pajek' -type f 2>/dev/null | sort | tail -1)
-    if [ -z "$LATEST_PAJEK" ]; then
-        echo "FATAL: 该样本无 skeleton.pajek，请先运行骨架化。"
-        python -m vascular_statistics.cli update-manifest \
-            --manifest "$OUTPUT_ROOT/manifest.json" \
-            --sample-key "$SAMPLE_DIR" \
-            --run-id "$RUN_ID" \
-            --status failed \
-            --exit-code 1 \
-            --end-time "$(date -Iseconds)" \
-            2>/dev/null || true
-        exit 1
-    fi
-    echo "Stats source: $LATEST_PAJEK"
-fi
-
-# 切换到输出目录执行（产物集中存放在 run_<ts>/ 下）
+# 切换到输出目录执行
 cd "$JOB_OUTDIR"
-
-# stats-only：将最新骨架复制到当前运行目录
-if [ "$PHASES" = "stats" ] && [ -n "$LATEST_PAJEK" ]; then
-    cp "$LATEST_PAJEK" "$JOB_OUTDIR/skeleton.pajek"
-fi
 
 PIPE_CMD=(
     python -m vascular_statistics.cli
@@ -364,8 +358,14 @@ fi
 echo "Command: ${PIPE_CMD[*]}"
 echo ""
 
-# 管线输出同时写入 stdout（Slurm 捕获）和 pipeline.log（run 目录内归档）
-"${PIPE_CMD[@]}" 2>&1 | tee "$JOB_OUTDIR/pipeline.log" &
+# 管线输出同时写入 stdout（Slurm 捕获）和日志（run 目录内归档）
+# stats 阶段写独立日志，避免覆盖骨架化阶段的 pipeline.log
+if [ "$PHASES" = "stats" ]; then
+    PIPE_LOG="$JOB_OUTDIR/pipeline_stats.log"
+else
+    PIPE_LOG="$JOB_OUTDIR/pipeline.log"
+fi
+"${PIPE_CMD[@]}" 2>&1 | tee "$PIPE_LOG" &
 PIPE_PID=$!
 
 set +e
@@ -387,30 +387,33 @@ echo "========================================"
 # ║  第六部分：收尾 —— manifest 更新 + run_meta.json + 产物清单              ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
-# --- 更新 manifest.json（作业结果） ---
-FINAL_STATUS="completed"
-if [ "$EXIT_CODE" -ne 0 ]; then
-    FINAL_STATUS="failed"
+# --- 更新 manifest.json + run_meta.json（stats 阶段跳过，统计从属于骨架 run） ---
+if [ "$PHASES" != "stats" ]; then
+    FINAL_STATUS="completed"
+    if [ "$EXIT_CODE" -ne 0 ]; then
+        FINAL_STATUS="failed"
+    fi
+
+    set +o pipefail
+    MANIFEST_LOG=$(python -m vascular_statistics.cli update-manifest \
+        --manifest "$OUTPUT_ROOT/manifest.json" \
+        --sample-key "$SAMPLE_DIR" \
+        --run-id "$RUN_ID" \
+        --status "$FINAL_STATUS" \
+        --exit-code "$EXIT_CODE" \
+        --end-time "$END_TIME" \
+        --start-time "$START_TIME" \
+        2>&1)
+    MANIFEST_RC=$?
+    set -o pipefail
+    echo "$MANIFEST_LOG" | sed 's/^/  [manifest] /'
+    if [ $MANIFEST_RC -ne 0 ]; then
+        echo "  [manifest] WARNING: update-manifest (end) failed (rc=$MANIFEST_RC)"
+    fi
 fi
 
-set +o pipefail
-MANIFEST_LOG=$(python -m vascular_statistics.cli update-manifest \
-    --manifest "$OUTPUT_ROOT/manifest.json" \
-    --sample-key "$SAMPLE_DIR" \
-    --run-id "$RUN_ID" \
-    --status "$FINAL_STATUS" \
-    --exit-code "$EXIT_CODE" \
-    --end-time "$END_TIME" \
-    --start-time "$START_TIME" \
-    2>&1)
-MANIFEST_RC=$?
-set -o pipefail
-echo "$MANIFEST_LOG" | sed 's/^/  [manifest] /'
-if [ $MANIFEST_RC -ne 0 ]; then
-    echo "  [manifest] WARNING: update-manifest (end) failed (rc=$MANIFEST_RC)"
-fi
-
-# --- 写入 run_meta.json（单次运行的完整元数据） ---
+# --- 写入 run_meta.json（单次运行的完整元数据，stats 阶段不单独记录） ---
+if [ "$PHASES" != "stats" ]; then
 python -c "
 import json, os, sys
 meta = {
@@ -434,6 +437,7 @@ with open(path, 'w') as f:
     json.dump(meta, f, indent=2, ensure_ascii=False)
 print(f'  [meta] {path}')
 "
+fi   # end of "if phases != stats" for run_meta.json
 
 # --- 列出输出产物 ---
 if [ -d "$JOB_OUTDIR" ]; then
