@@ -201,20 +201,23 @@ print(compute_sample_key('$REL_INPUT'))
 ")
 
 # --- 确定输出目录 ---
-# skeletonize / all → 新 run_<ts> 目录；stats → 已有骨架 run 目录（统计从属于骨架）
+# skeletonize / all → 新 run_<ts> 目录；stats → 遍历所有已有骨架 run 目录
+SAMPLE_ROOT="$OUTPUT_ROOT/$SAMPLE_DIR"
 if [ "$PHASES" = "stats" ]; then
-    SAMPLE_ROOT="$OUTPUT_ROOT/$SAMPLE_DIR"
-    JOB_OUTDIR=""
+    STATS_TARGETS=()
     if [ -d "$SAMPLE_ROOT" ]; then
-        # 找最新含 skeleton.pajek 的 run_* 目录
-        JOB_OUTDIR=$(find "$SAMPLE_ROOT" -name 'skeleton.pajek' -type f 2>/dev/null \
-            | sed 's|/skeleton\.pajek$||' | sort | tail -1)
+        while IFS= read -r pajek_file; do
+            STATS_TARGETS+=("$(dirname "$pajek_file")")
+        done < <(find "$SAMPLE_ROOT" -name 'skeleton.pajek' -type f 2>/dev/null | sort)
     fi
-    if [ -z "$JOB_OUTDIR" ]; then
+    if [ ${#STATS_TARGETS[@]} -eq 0 ]; then
         echo "FATAL: 该样本无 skeleton.pajek，请先运行骨架化。"
         exit 1
     fi
-    echo "Stats target: $JOB_OUTDIR （写入已有骨架目录，不创建新 run）"
+    echo "Stats targets: ${#STATS_TARGETS[@]} run(s)"
+    for t in "${STATS_TARGETS[@]}"; do
+        echo "  $t"
+    done
 else
     JOB_OUTDIR="$OUTPUT_ROOT/$SAMPLE_DIR/$RUN_ID"
     mkdir -p "$JOB_OUTDIR"
@@ -222,7 +225,9 @@ fi
 mkdir -p "$PROJECT_DIR/logs"
 
 echo "Sample dir : $SAMPLE_DIR"
-echo "Output dir : $JOB_OUTDIR"
+if [ "$PHASES" != "stats" ]; then
+    echo "Output dir : $JOB_OUTDIR"
+fi
 echo ""
 
 # --- 初始化 conda 环境（必须在任何依赖 vascstats 包的 Python 调用之前） ---
@@ -340,9 +345,6 @@ echo "Input  : $FULL_INPUT"
 echo "Volume : $VOLUME mm^3"
 echo ""
 
-# 切换到输出目录执行
-cd "$JOB_OUTDIR"
-
 PIPE_CMD=(
     python -m vascular_statistics.cli
     pipeline "$FULL_INPUT"
@@ -350,7 +352,6 @@ PIPE_CMD=(
     --sampling "$SAMPLING"
     --phases "$PHASES"
 )
-# --volume 可选：仅在明确传入时追加，否则由 CLI 从样本元数据自动查找
 if [ -n "$VOLUME" ]; then
     PIPE_CMD+=(--volume "$VOLUME")
 fi
@@ -358,20 +359,36 @@ fi
 echo "Command: ${PIPE_CMD[*]}"
 echo ""
 
-# 管线输出同时写入 stdout（Slurm 捕获）和日志（run 目录内归档）
-# stats 阶段写独立日志，避免覆盖骨架化阶段的 pipeline.log
-if [ "$PHASES" = "stats" ]; then
-    PIPE_LOG="$JOB_OUTDIR/pipeline_stats.log"
-else
-    PIPE_LOG="$JOB_OUTDIR/pipeline.log"
-fi
-"${PIPE_CMD[@]}" 2>&1 | tee "$PIPE_LOG" &
-PIPE_PID=$!
+# ═══════════════════════════════════════════════════════════════════════════
+# 执行管线：stats 阶段遍历所有骨架 run；skeletonize/all 阶段单次执行
+# ═══════════════════════════════════════════════════════════════════════════
+END_TIME="$(date -Iseconds)"
+EXIT_CODE=0
 
-set +e
-wait "$PIPE_PID"
-EXIT_CODE=$?
-set -e
+if [ "$PHASES" = "stats" ]; then
+    # 遍历所有含骨架的 run 目录，逐个运行统计
+    for run_dir in "${STATS_TARGETS[@]}"; do
+        echo ""
+        echo "--- Stats for: $run_dir ---"
+        cd "$run_dir"
+        set +e
+        "${PIPE_CMD[@]}" 2>&1 | tee "$run_dir/pipeline_stats.log"
+        RUN_RC=${PIPESTATUS[0]}
+        set -e
+        if [ "$RUN_RC" -ne 0 ]; then
+            echo "  WARNING: stats failed for $run_dir (rc=$RUN_RC)"
+            EXIT_CODE=1
+        fi
+    done
+else
+    cd "$JOB_OUTDIR"
+    "${PIPE_CMD[@]}" 2>&1 | tee "$JOB_OUTDIR/pipeline.log" &
+    PIPE_PID=$!
+    set +e
+    wait "$PIPE_PID"
+    EXIT_CODE=$?
+    set -e
+fi
 
 END_TIME="$(date -Iseconds)"
 
@@ -379,7 +396,9 @@ echo ""
 echo "========================================"
 echo "  End Time   : $(date '+%Y-%m-%d %H:%M:%S')"
 echo "  Exit Code  : $EXIT_CODE"
-echo "  Output Dir : $JOB_OUTDIR"
+if [ "$PHASES" != "stats" ]; then
+    echo "  Output Dir : $JOB_OUTDIR"
+fi
 echo "========================================"
 
 
@@ -439,10 +458,17 @@ print(f'  [meta] {path}')
 fi   # end of "if phases != stats" for run_meta.json
 
 # --- 列出输出产物 ---
-if [ -d "$JOB_OUTDIR" ]; then
+if [ "$PHASES" != "stats" ] && [ -d "$JOB_OUTDIR" ]; then
     echo ""
     echo "Output files:"
     ls -la "$JOB_OUTDIR"/
+fi
+if [ "$PHASES" = "stats" ]; then
+    echo ""
+    echo "Stats targets processed: ${#STATS_TARGETS[@]}"
+    for t in "${STATS_TARGETS[@]}"; do
+        ls -la "$t"/ 2>/dev/null | grep -E 'statistics_summary|generate_vessel|pipeline_stats' || true
+    done
 fi
 
 # --- 自动刷新样本级统计汇总（stats 或 all 阶段，且运行成功时） ---
