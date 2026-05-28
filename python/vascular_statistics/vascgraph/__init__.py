@@ -29,25 +29,9 @@ if not hasattr(nx, "connected_component_subgraphs"):
 from VascGraph import GeomGraph as GeomGraph
 from VascGraph import Skeletonize as Skeletonize
 from VascGraph import GraphIO as GraphIO
-from VascGraph import GraphValidation as GraphValidation
 from VascGraph import Tools as Tools
 
 try:
     from VascGraph import GraphLab as GraphLab
 except ImportError:
     GraphLab = None
-
-try:
-    from VascGraph import FlowSimulation as FlowSimulation
-except ImportError:
-    FlowSimulation = None
-
-try:
-    from VascGraph import GraphFlowSimulation as GraphFlowSimulation
-except ImportError:
-    GraphFlowSimulation = None
-
-try:
-    from VascGraph import InitFlowSimulation as InitFlowSimulation
-except ImportError:
-    InitFlowSimulation = None

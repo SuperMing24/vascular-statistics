@@ -9,6 +9,9 @@ __pycache__/
 *.py[cod]
 *.pyo
 
+# Java (VascGraph 供应商 JAR)
+*.jar
+
 # 输出
 output/
 
