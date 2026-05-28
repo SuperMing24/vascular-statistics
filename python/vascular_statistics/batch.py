@@ -5,7 +5,10 @@
 
 import json
 import os
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # Windows 不支持 fcntl，文件锁降级为 no-op
 import shutil
 import tempfile
 import glob
@@ -142,10 +145,12 @@ def save_manifest(manifest: dict, manifest_path: str) -> None:
     lock_path = manifest_path + ".lock"
     lock_fd = os.open(lock_path, os.O_CREAT | os.O_WRONLY | os.O_CLOEXEC)
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        if fcntl is not None:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
         _save_manifest_locked(manifest, manifest_path)
     finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        if fcntl is not None:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
         os.close(lock_fd)
 
 
@@ -201,7 +206,8 @@ def update_manifest(
         os.makedirs(parent, exist_ok=True)
     lock_fd = os.open(lock_path, os.O_CREAT | os.O_WRONLY | os.O_CLOEXEC)
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        if fcntl is not None:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
         # 锁内重新加载，获取最新状态
         manifest = load_manifest(manifest_path)
         samples = manifest.setdefault("samples", {})
@@ -332,7 +338,8 @@ def update_manifest(
 
         _save_manifest_locked(manifest, manifest_path)
     finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        if fcntl is not None:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
         os.close(lock_fd)
 
 
@@ -528,8 +535,7 @@ def batch_skeletonize(
     Returns:
         生成的 Pajek 文件路径列表。
     """
-    from vascular_statistics.vascgraph import GraphIO, Skeletonize
-    from VascGraph.Tools.CalcTools import fixG
+    from vascular_statistics.vascgraph import GraphIO, Skeletonize, Tools
     ReadStackMat = GraphIO.ReadStackMat
     WritePajek = GraphIO.WritePajek
     Skeleton = Skeletonize.Skeleton
@@ -549,7 +555,7 @@ def batch_skeletonize(
         stack = ReadStackMat(fpath).GetOutput()
         sk = Skeleton(label=stack, **skeleton_kwargs)
         sk.Update()
-        graph = fixG(sk.GetOutput())
+        graph = Tools.CalcTools.fixG(sk.GetOutput())
         WritePajek(path="", name=out_path, graph=graph)
         results.append(out_path)
         print(f"  → {out_path}  ({graph.number_of_nodes()} 节点)")

@@ -11,7 +11,6 @@ Click CLI — Vascular_Statistics 统一命令行入口。
 
 import os
 import subprocess
-import sys
 
 import click
 
@@ -122,8 +121,7 @@ def skeletonize(input, output, sampling, speed, dist, med):
 
     INPUT: .mat 或 .tif 格式的 3D 二值分割。
     """
-    from vascular_statistics.vascgraph import GraphIO, Skeletonize
-    from VascGraph.Tools.CalcTools import fixG
+    from vascular_statistics.vascgraph import GraphIO, Skeletonize, Tools
     ReadStackMat = GraphIO.ReadStackMat
     WritePajek = GraphIO.WritePajek
     Skeleton = Skeletonize.Skeleton
@@ -151,7 +149,7 @@ def skeletonize(input, output, sampling, speed, dist, med):
     )
     sk.Update()
     graph = sk.GetOutput()
-    graph = fixG(graph)
+    graph = Tools.CalcTools.fixG(graph)
 
     # 输出
     WritePajek(path="", name=output, graph=graph)
@@ -178,8 +176,7 @@ def pipeline(input, volume, output_stem, phases, sampling):
         --phases all          全流程（默认）
     """
     from vascular_statistics.bridge import pajek_to_cpp_input
-    from vascular_statistics.vascgraph import GraphIO, Skeletonize
-    from VascGraph.Tools.CalcTools import fixG
+    from vascular_statistics.vascgraph import GraphIO, Skeletonize, Tools
     ReadStackMat = GraphIO.ReadStackMat
     WritePajek = GraphIO.WritePajek
     Skeleton = Skeletonize.Skeleton
@@ -208,7 +205,7 @@ def pipeline(input, volume, output_stem, phases, sampling):
         sk = Skeleton(label=stack, sampling=sampling,
                       speed_param=0.05, dist_param=0.5, med_param=0.5)
         sk.Update()
-        graph = fixG(sk.GetOutput())
+        graph = Tools.CalcTools.fixG(sk.GetOutput())
 
         pajek_path = output_stem + ".pajek"
         WritePajek(path="", name=pajek_path, graph=graph)

@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import scipy.io as sio
 
-from vascular_statistics.batch import compute_sample_key
+from vascular_statistics.batch import STAGE_DIRS, compute_sample_key
 
 # ═══════════════════════════════════════════════════════════════════════
 # 扫描
@@ -24,18 +24,17 @@ def discover_mat_files(
 ) -> List[str]:
     """递归扫描 data_root 下的 .mat 文件。"""
     from glob import glob as _glob
-    import os as _os
-    pattern = _os.path.join(data_root, glob_pattern)
+    pattern = os.path.join(data_root, glob_pattern)
     # glob 新式递归支持 **
     try:
         files = _glob(pattern, recursive=True)
     except TypeError:
         # Python < 3.5 fallback: walk manually
         files = []
-        for dirpath, _, filenames in _os.walk(data_root):
+        for dirpath, _, filenames in os.walk(data_root):
             for fn in filenames:
                 if fn.endswith(".mat") and "angiogram_crop_" in fn:
-                    files.append(_os.path.join(dirpath, fn))
+                    files.append(os.path.join(dirpath, fn))
     return sorted(files)
 
 
@@ -77,9 +76,7 @@ def parse_sample_path(
 
     # 路径层级：group / date_animal_daypoint / [angiogram] / file
     # 过滤 stage dirs（从 batch.py 复用逻辑）
-    stage_dirs = {"angiogram", "angiography", "segmentation", "seg",
-                  "images", "raw", "processed", "interim", "results"}
-    meaningful = [d for d in parts[:-1] if d.lower() not in stage_dirs]
+    meaningful = [d for d in parts[:-1] if d.lower() not in STAGE_DIRS]
 
     group = meaningful[0] if len(meaningful) > 0 else "_unknown"
     date_dir = meaningful[1] if len(meaningful) > 1 else "_unknown"
@@ -151,8 +148,7 @@ def load_mat_metadata(mat_path: str) -> Dict[str, Any]:
         "foreground_voxel_count": foreground,
         "grayscale_sum": grayscale_sum,
         "rect_position": rect_position,
-        "frame_range": frame_range if frame_range
-        else ([1, shape[0]] if z_start is None else None),
+        "frame_range": frame_range if frame_range else [1, shape[0]],
     }
 
 
