@@ -446,4 +446,14 @@ if [ -d "$JOB_OUTDIR" ]; then
     ls -la "$JOB_OUTDIR"/
 fi
 
+# --- 自动刷新样本级统计汇总（stats 或 all 阶段，且运行成功时） ---
+if [ "$EXIT_CODE" -eq 0 ] && { [ "$PHASES" = "stats" ] || [ "$PHASES" = "all" ]; }; then
+    echo ""
+    echo "--- Refreshing sample-level aggregate statistics ---"
+    python -m vascular_statistics.cli aggregate-stats \
+        --output-root "$OUTPUT_ROOT" \
+        --sample-key "$SAMPLE_DIR" \
+        2>&1 | sed 's/^/  [aggregate] /'
+fi
+
 exit $EXIT_CODE
