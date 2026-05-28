@@ -421,7 +421,6 @@ meta = {
     'sample_key': '$SAMPLE_DIR',
     'input_path': '$REL_INPUT',
     'input_format': '${REL_INPUT##*.}',
-    'volume_mm3': $VOLUME,
     'sampling': $SAMPLING,
     'phases': '$PHASES',
     'job_id': '$SLURM_JOB_ID',

@@ -117,10 +117,7 @@ bool GenerateStatistics(const std::string& edges_file,
         return false;
     }
 
-    out5 << "仅统计直径 >= 10 微米的大血管\n"
-         << "以下 tortuosity / segment length / diameter 仅统计 nodes 数 >= 3 的 segment\n"
-         << "segment density 同样仅统计直径 >= 10 微米大血管\n"
-         << "统计结果如下\n";
+    out5 << "Vascular_Statistics — 单次运行统计\n";
 
     // ---------- 段遍历 ----------
     int select_node = 0;
@@ -253,10 +250,11 @@ bool GenerateStatistics(const std::string& edges_file,
     }
 
     // ---------- 写汇总文件 ----------
-    out5 << "平均直径 (microns): " << avg_seg_radius * 4 << "\n"
-         << "平均长度 (microns): " << avg_seg_length * 2 << "\n"
-         << "段密度 (segment/mm^3): " << static_cast<double>(no_effective_seg) / volume << "\n"
-         << "平均弯曲度 (a.u.): " << avg_seg_tortuosity << "\n";
+    out5 << "平均直径 (μm): " << avg_seg_radius * 4 << "\n"
+         << "平均长度 (μm): " << avg_seg_length * 2 << "\n"
+         << "段密度 (seg/mm³): " << static_cast<double>(no_effective_seg) / volume << "\n"
+         << "平均弯曲度: " << avg_seg_tortuosity << "\n"
+         << "注：仅统计直径 >= 10 μm 且节点数 >= 3 的血管段\n";
 
     out1.close();
     out2.close();

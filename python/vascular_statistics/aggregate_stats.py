@@ -39,7 +39,9 @@ def parse_run_statistics(run_dir: str) -> Optional[Dict[str, Any]]:
         with open(stats_path, "r", encoding="utf-8") as f:
             for line in f:
                 m = re.match(
-                    r"^(平均直径|平均长度|段密度|平均弯曲度)\s*[\(（].*[\)）]\s*:\s*([\d.]+|inf|nan|-inf)",
+                    r"^(平均直径|平均长度|段密度|平均弯曲度)"
+                    r"(?:\s*[\(（].*[\)）])?\s*:\s*"
+                    r"([\d.]+|inf|nan|-inf)",
                     line,
                 )
                 if m:
@@ -160,17 +162,12 @@ def aggregate_sample_stats(
                 "values": values,
             }
 
-    # 确定组织体积（优先 sample_metadata，其次 run_meta）
+    # 确定组织体积（来自 sample_metadata.json）
     volume_mm3 = None
     if sample_meta:
         volume_mm3 = (
             sample_meta.get("spatial", {}).get("tissue_volume_mm3")
         )
-    if volume_mm3 is None:
-        for r in runs_data:
-            if r.get("volume_mm3") is not None:
-                volume_mm3 = r["volume_mm3"]
-                break
 
     # 兼容旧字段名 (animal_id) 与新字段名 (batch_id)
     parsed = sample_meta.get("path_parsed", {})
