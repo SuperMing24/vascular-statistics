@@ -126,7 +126,7 @@ OUTPUT_ROOT="/share/home/sukm/experiments/vascstats"
 #   sampling    — 稀疏采样率 (1.0=最密, 2.0=快速, 默认 1.0)
 #   phases      — 执行阶段: all | skeletonize | stats（默认 all）
 INPUT_FILE="${1:?缺少输入文件参数}"
-VOLUME="${2:-0}"
+VOLUME="${2:-}"
 OUTPUT_STEM="${3:-skeleton}"
 SAMPLING="${4:-1.0}"
 PHASES="${5:-all}"
