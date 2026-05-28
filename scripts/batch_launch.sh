@@ -231,7 +231,7 @@ to_submit, skipped, counts = filter_by_skeleton_count(
     '$OUTPUT_ROOT',
     min_skeletons=$MIN_SKELETONS,
     max_skeletons=$MAX_SKELETONS,
-    has_skeleton_only=$HAS_SKELETON,
+    has_skeleton_only=('$HAS_SKELETON' == 'true'),
 )
 
 # 输出计数摘要（stderr 以避免混入文件列表）
