@@ -244,19 +244,23 @@ fi
 
 # --- 向 manifest.json 注册作业开始（stats 阶段不注册，统计从属于骨架 run） ---
 if [ "$PHASES" != "stats" ]; then
+    # 构造 update-manifest 参数（--volume-mm3 仅当 VOLUME 非空时传入）
+    MANIFEST_ARGS=(
+        --manifest "$OUTPUT_ROOT/manifest.json"
+        --sample-key "$SAMPLE_DIR"
+        --input-path "$REL_INPUT"
+        --run-id "$RUN_ID"
+        --job-id "$SLURM_JOB_ID"
+        --status running
+        --start-time "$START_TIME"
+        --node "$SLURM_NODELIST"
+        --commit "$COMMIT_HASH"
+    )
+    if [ -n "$VOLUME" ]; then
+        MANIFEST_ARGS+=(--volume-mm3 "$VOLUME")
+    fi
     set +o pipefail
-    MANIFEST_LOG=$(python -m vascular_statistics.cli update-manifest \
-        --manifest "$OUTPUT_ROOT/manifest.json" \
-        --sample-key "$SAMPLE_DIR" \
-        --input-path "$REL_INPUT" \
-        --volume-mm3 "$VOLUME" \
-        --run-id "$RUN_ID" \
-        --job-id "$SLURM_JOB_ID" \
-        --status running \
-        --start-time "$START_TIME" \
-        --node "$SLURM_NODELIST" \
-        --commit "$COMMIT_HASH" \
-        2>&1)
+    MANIFEST_LOG=$(python -m vascular_statistics.cli update-manifest "${MANIFEST_ARGS[@]}" 2>&1)
     MANIFEST_RC=$?
     set -o pipefail
     echo "$MANIFEST_LOG" | sed 's/^/  [manifest] /'
