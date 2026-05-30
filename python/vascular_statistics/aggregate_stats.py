@@ -41,7 +41,7 @@ def parse_run_statistics(run_dir: str) -> Optional[Dict[str, Any]]:
                 m = re.match(
                     r"^(平均直径|平均长度|段密度|平均弯曲度)"
                     r"(?:\s*[\(（].*[\)）])?\s*:\s*"
-                    r"([\d.]+|inf|nan|-inf)",
+                    r"(-?[\d.]+|-?inf|-?nan)",
                     line,
                 )
                 if m:
