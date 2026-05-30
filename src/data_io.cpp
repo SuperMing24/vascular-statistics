@@ -137,11 +137,18 @@ bool GenerateStatistics(const std::string& edges_file,
 
     while (degrees_sum != 0) {
         // 寻找下一个起点：端点(1)或分叉点(3)且仍有未遍历边
+        select_node = 0;
         for (int i = 0; i < idx_max; i++) {
             if ((type[i] == 1 || type[i] == 3) && degrees[i] >= 1) {
                 select_node = i + 1;
                 break;
             }
+        }
+        // 保护：无合法起点时退出（图数据不一致，如孤立边或度数计数错误）
+        if (select_node == 0) {
+            std::cerr << "Warning: 无可遍历起点（剩余 degree_sum="
+                      << degrees_sum << "），强制退出段遍历。\n";
+            break;
         }
 
         out1 << select_node << " ";
@@ -157,9 +164,11 @@ bool GenerateStatistics(const std::string& edges_file,
         k = 1;
 
         while (!end_of_vessel) {
+            bool edge_found = false;
             for (int i = 0; i < pair_count; i++) {
                 // 正向匹配
                 if (edge_array[i][0] == previous_node && edge_array[i][2] != 0) {
+                    edge_found = true;
                     next_node = edge_array[i][1];
                     avg_temp -= (avg_temp - vertices_info[next_node - 1][3]) / (k + 1);
                     k++;
@@ -200,10 +209,11 @@ bool GenerateStatistics(const std::string& edges_file,
                         }
                         break;
                     }
-                    continue;
+                    break;  // 找到匹配边后退出 for 循环，while 循环以新 previous_node 继续
                 }
                 // 反向匹配
                 if (edge_array[i][1] == previous_node && edge_array[i][2] != 0) {
+                    edge_found = true;
                     next_node = edge_array[i][0];
                     avg_temp -= (avg_temp - vertices_info[next_node - 1][3]) / (k + 1);
                     k++;
@@ -244,7 +254,17 @@ bool GenerateStatistics(const std::string& edges_file,
                         }
                         break;
                     }
+                    break;  // 找到匹配边后退出 for 循环，while 循环以新 previous_node 继续
                 }
+            }
+            // 保护：当前节点无未遍历边（孤立节点或度数计数不一致）
+            if (!edge_found) {
+                if (degrees[previous_node - 1] > 0) {
+                    degrees_sum -= degrees[previous_node - 1];
+                    degrees[previous_node - 1] = 0;
+                }
+                end_of_vessel = true;
+                out1 << "\n";
             }
         }
     }
