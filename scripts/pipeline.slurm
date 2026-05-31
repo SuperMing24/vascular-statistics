@@ -68,10 +68,10 @@
 #     SpMV 核心数超过 4-8 后收益递减（受限于内存带宽，非计算能力）。
 #     Amdahl 定律：8→16 核仅 +11% 增益但资源翻倍。
 #
-#   内存：48 GB（典型样本 ~8-16 GB，大 3D 堆栈 ~32 GB，保留 50% 余量）
+#   内存：64 GB（大样本（>4M 前景体素）稀疏矩阵 ~32-48 GB + 50% 余量）
 #
-#   时限：1 天（实测采样=1.0 时骨架化需 3-8h，1 天提供充足余量；
-#     compute 分区 MaxTime=7 天，1 天不影响回填优先级。）
+#   时限：4 天（大样本（>4M 前景体素）sampling=1.0 时预估 ~69h；
+#     4 天=96h 提供 1.4× 余量；compute 分区 MaxTime=7 天。）
 #
 #   分区：compute（优先）
 #     推测为双路服务器（96 核无法来自单 CPU）→ 双内存控制器 → 双倍带宽。
@@ -88,10 +88,10 @@
 
 #SBATCH --partition=compute
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=48G
+#SBATCH --mem=64G
 #SBATCH --ntasks=1
 
-#SBATCH --time=1-00:00:00
+#SBATCH --time=4-00:00:00
 #SBATCH --requeue
 #SBATCH --signal=B:SIGTERM@120
 
