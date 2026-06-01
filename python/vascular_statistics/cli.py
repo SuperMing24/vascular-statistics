@@ -493,5 +493,92 @@ def aggregate_stats_cmd(output_root, sample_key):
                f"失败: {result['failed']}")
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# 微血管统计命令（直径 < 10 μm）
+# ═══════════════════════════════════════════════════════════════════════
+
+@main.command("micro-stats")
+@click.option("--output-root", type=click.Path(exists=True), required=True,
+              help="输出根目录（含样本子目录）")
+@click.option("--sample-key", default=None,
+              help="仅处理指定样本（缺省则全部已完成骨架化的样本）")
+def micro_stats_cmd(output_root, sample_key):
+    """为所有已完成骨架化的 run 生成微血管（直径 < 10 μm）统计。
+
+    从已有 generate_vessel_radius.txt / generate_vessel_path_length.txt /
+    generate_vessel_tortuosity.txt 中提取直径 < 10 μm 的微血管段，
+    写入新的 _micro 后缀文件，不覆盖原有统计。
+
+    幂等：已有 statistics_summary_micro.txt 的 run 将自动跳过。
+
+    示例：
+      vascular-stats micro-stats --output-root /share/home/sukm/experiments/vascstats
+      vascular-stats micro-stats --output-root ... --sample-key "BCAS_1st/20241009_A192_D0/angiogram_crop_97_111"
+    """
+    from vascular_statistics.microvascular_stats import run_micro_stats
+
+    sample_keys = [sample_key] if sample_key else None
+    result = run_micro_stats(output_root, sample_keys=sample_keys)
+
+    click.echo()
+    click.echo(f"已处理: {result['processed']}, "
+               f"跳过(已有): {result['skipped']}, "
+               f"无微血管: {result['no_micro']}, "
+               f"失败: {result['failed']}")
+
+
+@main.command("aggregate-micro-stats")
+@click.option("--output-root", type=click.Path(exists=True), required=True,
+              help="输出根目录（含样本子目录）")
+@click.option("--sample-key", default=None,
+              help="仅处理指定样本（缺省则全部）")
+def aggregate_micro_stats_cmd(output_root, sample_key):
+    """汇总同一样本多次骨架化运行的微血管统计（直径 < 10 μm）。
+
+    遍历每个样本目录下所有 run_*/statistics_summary_micro.txt，
+    计算 4 项指标的均值 ± 标准差，
+    将结果写入样本目录下的 statistics_summary_micro.txt。
+
+    示例：
+      vascular-stats aggregate-micro-stats --output-root /share/home/sukm/experiments/vascstats
+      vascular-stats aggregate-micro-stats --output-root ... --sample-key "BCAS_1st/..."
+    """
+    from vascular_statistics.aggregate_stats import run_aggregation
+
+    sample_keys = [sample_key] if sample_key else None
+    result = run_aggregation(output_root, sample_keys=sample_keys, suffix="_micro")
+
+    click.echo()
+    click.echo(f"已处理: {result['processed']}, "
+               f"跳过: {result['skipped']}, "
+               f"失败: {result['failed']}")
+
+
+@main.command("micro-summary")
+@click.option("--output-root", type=click.Path(exists=True), required=True,
+              help="输出根目录（含样本子目录）")
+@click.option("--sample-key", default=None,
+              help="仅包含指定样本（缺省则全部）")
+def micro_summary_cmd(output_root, sample_key):
+    """生成跨样本微血管统计汇总文件。
+
+    扫描所有样本的 statistics_summary_micro.txt（需先运行 micro-stats +
+    aggregate-micro-stats），汇总为单一 microvascular_cross_sample_summary.txt，
+    放在 output_root 根目录。
+
+    示例：
+      vascular-stats micro-summary --output-root /share/home/sukm/experiments/vascstats
+    """
+    from vascular_statistics.microvascular_stats import generate_cross_sample_summary
+
+    sample_keys = [sample_key] if sample_key else None
+    result = generate_cross_sample_summary(output_root, sample_keys=sample_keys)
+
+    if result:
+        click.echo(f"跨样本微血管汇总已写入: {result}")
+    else:
+        click.echo("无有效微血管统计数据，未生成汇总文件。", err=True)
+
+
 if __name__ == "__main__":
     main()

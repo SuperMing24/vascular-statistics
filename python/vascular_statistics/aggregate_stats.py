@@ -17,16 +17,17 @@ from typing import Any, Dict, List, Optional, Tuple
 # 解析单次运行的统计输出
 # ═══════════════════════════════════════════════════════════════════════
 
-def parse_run_statistics(run_dir: str) -> Optional[Dict[str, Any]]:
+def parse_run_statistics(run_dir: str, suffix: str = "") -> Optional[Dict[str, Any]]:
     """解析单个 run_* 目录中的统计数据。
 
     参数：
         run_dir: run_YYYYMMDD_HHMMSS 目录路径。
+        suffix: 统计文件后缀（"" = 主统计, "_micro" = 微血管统计）。
 
     返回：
         dict 含 4 项指标 + 段数 + 运行元数据，若目录无统计文件则返回 None。
     """
-    stats_path = os.path.join(run_dir, "statistics_summary.txt")
+    stats_path = os.path.join(run_dir, f"statistics_summary{suffix}.txt")
     meta_path = os.path.join(run_dir, "run_meta.json")
     vessel_path = os.path.join(run_dir, "generate_vessel.txt")
 
@@ -93,11 +94,13 @@ def parse_run_statistics(run_dir: str) -> Optional[Dict[str, Any]]:
 
 def aggregate_sample_stats(
     sample_dir: str,
+    suffix: str = "",
 ) -> Optional[Dict[str, Any]]:
     """跨所有 run_* 目录聚合统计数据。
 
     参数：
         sample_dir: 样本目录路径（含 run_* 子目录）。
+        suffix: 统计文件后缀（"" = 主统计, "_micro" = 微血管统计）。
 
     返回：
         聚合 dict，含 runs 列表 + 均值/标准差 + 样本元数据，
@@ -112,7 +115,7 @@ def aggregate_sample_stats(
         run_dir = os.path.join(sample_dir, entry)
         if not entry.startswith("run_") or not os.path.isdir(run_dir):
             continue
-        parsed = parse_run_statistics(run_dir)
+        parsed = parse_run_statistics(run_dir, suffix=suffix)
         if parsed is not None:
             runs_data.append(parsed)
 
@@ -192,13 +195,21 @@ def aggregate_sample_stats(
 # 格式化输出
 # ═══════════════════════════════════════════════════════════════════════
 
-def format_aggregate_stats(agg: Dict[str, Any]) -> str:
-    """将聚合结果格式化为可读文本。"""
+def format_aggregate_stats(agg: Dict[str, Any], suffix: str = "") -> str:
+    """将聚合结果格式化为可读文本。
+
+    参数：
+        agg: aggregate_sample_stats 返回的聚合 dict。
+        suffix: 统计文件后缀（"" = 主统计, "_micro" = 微血管统计）。
+    """
     lines: List[str] = []
     sep = "=" * 78
 
+    is_micro = suffix == "_micro"
+    stat_label = "微血管统计汇总（直径 < 10 μm）" if is_micro else "样本统计汇总"
+
     lines.append(sep)
-    lines.append("  Vascular_Statistics — 样本统计汇总")
+    lines.append(f"  Vascular_Statistics — {stat_label}")
     lines.append(sep)
     lines.append(f"样本:    {agg['sample_key']}")
     lines.append(
@@ -298,6 +309,11 @@ def format_aggregate_stats(agg: Dict[str, Any]) -> str:
                 "注：段密度 = 有效段数 / 组织体积。"
                 "当前样本 volume 可能未正确设置，导致密度为 N/A。"
             )
+        elif is_micro:
+            lines.append(
+                "注：段密度 = 微血管段数 / 组织体积。"
+                "仅统计直径 < 10 μm 且节点数 >= 3 的微血管段。"
+            )
         else:
             lines.append(
                 "注：段密度 = 有效段数 / 组织体积。"
@@ -328,21 +344,23 @@ def format_aggregate_stats(agg: Dict[str, Any]) -> str:
 
 def write_aggregate_stats(
     sample_dir: str,
+    suffix: str = "",
 ) -> Optional[str]:
-    """汇总样本统计并写入 statistics_summary.txt。
+    """汇总样本统计并写入 statistics_summary{suffix}.txt。
 
     参数：
         sample_dir: 样本目录路径（同一级目录下的 run_* 将被扫描）。
+        suffix: 统计文件后缀（"" = 主统计, "_micro" = 微血管统计）。
 
     返回：
         写入的文件路径，若无有效数据返回 None。
     """
-    agg = aggregate_sample_stats(sample_dir)
+    agg = aggregate_sample_stats(sample_dir, suffix=suffix)
     if agg is None:
         return None
 
-    out_path = os.path.join(sample_dir, "statistics_summary.txt")
-    formatted = format_aggregate_stats(agg)
+    out_path = os.path.join(sample_dir, f"statistics_summary{suffix}.txt")
+    formatted = format_aggregate_stats(agg, suffix=suffix)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(formatted)
     return out_path
@@ -355,12 +373,14 @@ def write_aggregate_stats(
 def run_aggregation(
     output_root: str,
     sample_keys: Optional[List[str]] = None,
+    suffix: str = "",
 ) -> dict:
     """对所有样本（或指定样本）运行统计聚合。
 
     参数：
         output_root: 输出根目录。
         sample_keys: 指定样本键列表。None = 全部。
+        suffix: 统计文件后缀（"" = 主统计, "_micro" = 微血管统计）。
 
     返回：
         {"processed": N, "skipped": N, "failed": N}
@@ -402,7 +422,7 @@ def run_aggregation(
     for sk in sorted(sample_keys):
         sample_dir = os.path.join(output_root, sk)
         try:
-            result = write_aggregate_stats(sample_dir)
+            result = write_aggregate_stats(sample_dir, suffix=suffix)
             if result:
                 processed += 1
                 print(f"  [{processed}] {sk}")
