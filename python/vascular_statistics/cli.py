@@ -303,6 +303,99 @@ def gui():
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# 血管分割桥接命令（Phase B — 2026-06-07）
+# ═══════════════════════════════════════════════════════════════════════
+
+@main.command("segment")
+@click.argument("input", type=click.Path(exists=True))
+@click.option(
+    "--output-dir", "-o", default=".",
+    help="输出目录（默认当前目录）",
+)
+@click.option(
+    "--normalize", "-n",
+    type=click.Choice(["passthrough", "minmax", "percentile", "zscore"]),
+    default="passthrough",
+    help="强度归一化策略（默认 passthrough=不做处理，依赖模型内部逐窗口MinMax）",
+)
+@click.option(
+    "--threshold", "-t", type=float, default=0.5,
+    help="二值化阈值（默认 0.5）",
+)
+@click.option(
+    "--min-size", type=int, default=0,
+    help="最小连通域体素数（0=不过滤，建议 100-500）",
+)
+@click.option(
+    "--keep-nii", is_flag=True,
+    help="保留中间 .nii 文件（默认推理完成后自动删除）",
+)
+@click.option(
+    "--stats", "show_stats", is_flag=True,
+    help="推理完成后打印掩码质量统计",
+)
+def segment_cmd(input, output_dir, normalize, threshold, min_size,
+                keep_nii, show_stats):
+    """对双光子原图 .mat 文件进行血管分割，输出二值掩码 .tif。
+
+    INPUT: .mat 文件（含 'stack' 键的 3D 双光子荧光成像）。
+
+    使用 nnU-Net 2D（MiniVess 验证集最优模型，Dice=0.856 clDice=0.593）
+    进行推理。输出可直接用于 skeletonize 命令。
+
+    示例：
+
+        # 基本用法
+        vascular-stats segment angiogram_crop_93_163.mat -o ./seg_output
+
+        # 带百分位归一化（抑制极端离群值）
+        vascular-stats segment angiogram_crop_93_163.mat -o ./seg_output -n percentile
+
+        # 去除 <200 体素的小连通域
+        vascular-stats segment angiogram_crop_93_163.mat -o ./seg_output --min-size 200 --stats
+    """
+    from vascular_statistics.segmentation import segment_mat, load_mask, mask_stats
+
+    click.echo(f"输入: {input}")
+    click.echo(f"归一化策略: {normalize}")
+    click.echo(f"模型: nnU-Net 2D (seed22, epoch 41)")
+
+    try:
+        tif_path = segment_mat(
+            mat_path=input,
+            output_dir=output_dir,
+            normalize=normalize,
+            threshold=threshold,
+            min_component_size=min_size,
+            keep_nii=keep_nii,
+        )
+    except FileNotFoundError as e:
+        click.echo(str(e), err=True)
+        click.echo(
+            "\n提示：推理需要在服务器端运行（需要 GPU + Vascular_Extraction 环境）。\n"
+            "本地开发机不支持此命令。",
+            err=True,
+        )
+        raise click.Abort()
+    except Exception as e:
+        click.echo(f"分割失败: {e}", err=True)
+        raise click.Abort()
+
+    click.echo(f"二值掩码: {tif_path}")
+
+    if show_stats:
+        mask = load_mask(tif_path)
+        stats = mask_stats(mask)
+        click.echo(f"  形状: {stats['shape']}")
+        click.echo(f"  前景体素: {stats['foreground_voxels']:,} "
+                    f"({stats['foreground_ratio']:.2%})")
+        if "num_connected_components" in stats:
+            click.echo(f"  连通域数: {stats['num_connected_components']:,}")
+            click.echo(f"  最大连通域: {stats['largest_component_size']:,} 体素")
+            click.echo(f"  平均连通域: {stats['mean_component_size']:.0f} 体素")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # 输出结构管理命令（S3: update-manifest + status）
 # ═══════════════════════════════════════════════════════════════════════
 
