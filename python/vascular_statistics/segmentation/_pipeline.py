@@ -94,6 +94,14 @@ def segment_mat(
 
         _save_mask_tif(mask, tif_path)
 
+        # 重命名为干净的输出文件名（去掉临时 _seg_tmp 后缀）
+        clean_path = os.path.join(output_dir, stem + ".tiff")
+        if tif_path != clean_path:
+            if os.path.exists(clean_path):
+                os.unlink(clean_path)
+            os.rename(tif_path, clean_path)
+            tif_path = clean_path
+
         return tif_path
 
     finally:
