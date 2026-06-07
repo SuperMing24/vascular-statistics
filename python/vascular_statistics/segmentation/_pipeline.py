@@ -55,8 +55,8 @@ def segment_mat(
     if keep_nii:
         nii_path = os.path.join(output_dir, stem + ".nii")
     else:
-        tmp_fd, nii_path = tempfile.mkstemp(suffix=".nii", prefix=stem + "_")
-        os.close(tmp_fd)
+        # 使用可预测的临时文件名（避免 predict.py 输出带随机后缀）
+        nii_path = os.path.join(tempfile.gettempdir(), stem + "_seg_tmp.nii")
 
     try:
         mat_to_nii(mat_path, nii_path)
