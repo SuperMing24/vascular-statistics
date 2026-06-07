@@ -59,6 +59,7 @@ def run_segmentation(
     output_dir: str,
     exp_dir: Optional[str] = None,
     threshold: float = 0.5,
+    device: str = "cuda",
     timeout_sec: int = 3600,
 ) -> str:
     """对单个 .nii 文件运行分割推理，输出二值掩码 .tif。
@@ -69,6 +70,7 @@ def run_segmentation(
         exp_dir: Extraction 实验目录（含 checkpoints/best_model.pth）。
                  默认使用 nnU-Net 2D seed22。
         threshold: 二值化阈值（默认 0.5）。
+        device: 推理设备（"cuda" | "cpu"）。默认 cuda。
         timeout_sec: 推理超时秒数（默认 3600 = 1 小时）。
 
     返回：
@@ -100,6 +102,7 @@ def run_segmentation(
         "--input", nii_path,
         "--out", out_tif,
         "--threshold", str(threshold),
+        "--device", device,
     ]
 
     # 如果 conda 不可用，回退到直接 python 调用（依赖当前环境）
@@ -112,6 +115,7 @@ def run_segmentation(
             "--input", nii_path,
             "--out", out_tif,
             "--threshold", str(threshold),
+            "--device", device,
         ]
 
     result = subprocess.run(

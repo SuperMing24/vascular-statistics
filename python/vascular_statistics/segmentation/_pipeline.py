@@ -18,6 +18,7 @@ def segment_mat(
     threshold: float = 0.5,
     min_component_size: int = 0,
     keep_nii: bool = False,
+    device: str = "cuda",
     timeout_sec: int = 3600,
 ) -> str:
     """一站式：.mat 原图 → 分割 → 二值掩码 .tif。
@@ -74,6 +75,7 @@ def segment_mat(
             nii_path=nii_path,
             output_dir=output_dir,
             threshold=threshold,
+            device=device,
             timeout_sec=timeout_sec,
         )
 

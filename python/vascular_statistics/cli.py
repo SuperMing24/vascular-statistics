@@ -331,11 +331,17 @@ def gui():
     help="保留中间 .nii 文件（默认推理完成后自动删除）",
 )
 @click.option(
+    "--device", "-d",
+    type=click.Choice(["cuda", "cpu"]),
+    default="cuda",
+    help="推理设备（默认 cuda，需 GPU 节点）",
+)
+@click.option(
     "--stats", "show_stats", is_flag=True,
     help="推理完成后打印掩码质量统计",
 )
 def segment_cmd(input, output_dir, normalize, threshold, min_size,
-                keep_nii, show_stats):
+                keep_nii, device, show_stats):
     """对双光子原图 .mat 文件进行血管分割，输出二值掩码 .tif。
 
     INPUT: .mat 文件（含 'stack' 键的 3D 双光子荧光成像）。
@@ -368,6 +374,7 @@ def segment_cmd(input, output_dir, normalize, threshold, min_size,
             threshold=threshold,
             min_component_size=min_size,
             keep_nii=keep_nii,
+            device=device,
         )
     except FileNotFoundError as e:
         click.echo(str(e), err=True)
