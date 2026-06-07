@@ -38,26 +38,54 @@ def mat_to_nii(
 
     mat = sio.loadmat(mat_path)
 
-    # 查找目标数组
+    # 查找目标 3D 数组 — 按优先级：
+    #   1. 键名为 'stack' 的数组（VascStats 约定命名）
+    #   2. 第一个 3D numpy 数组
+    #   3. 如果用户指定了 array_key，则只查找该键
     target = None
-    for key, value in mat.items():
-        if key.startswith("__"):
-            continue
-        if isinstance(value, np.ndarray):
-            if array_key is None or key == array_key:
-                target = value
-                if array_key is not None:
-                    break
 
-    if target is None:
-        available = [k for k, v in mat.items()
-                     if not k.startswith("__") and isinstance(v, np.ndarray)]
-        raise ValueError(
-            f"在 {mat_path} 中找不到合适的 3D 数组。"
-            f"可用键: {available}"
-        )
+    if array_key is not None:
+        # 用户指定键名 → 严格匹配
+        if array_key in mat:
+            target = mat[array_key]
+        else:
+            available = [k for k, v in mat.items()
+                         if not k.startswith("__") and isinstance(v, np.ndarray)]
+            raise ValueError(
+                f"在 {mat_path} 中找不到键 '{array_key}'。"
+                f"可用键: {available}"
+            )
+    else:
+        # 自动发现：优先 'stack'，否则取最大的 3D 数组
+        arrays_3d = []
+        for key, value in mat.items():
+            if key.startswith("__"):
+                continue
+            if isinstance(value, np.ndarray):
+                v = np.squeeze(value)
+                if v.ndim == 3:
+                    arrays_3d.append((key, v))
 
-    # 确保是 3D（去掉多余的单一维度）
+        if not arrays_3d:
+            available = [(k, np.squeeze(v).shape)
+                         for k, v in mat.items()
+                         if not k.startswith("__") and isinstance(v, np.ndarray)]
+            raise ValueError(
+                f"在 {mat_path} 中找不到 3D 数组。"
+                f"可用键（含维度）: {available}"
+            )
+
+        # 优先 'stack' 键
+        for key, arr in arrays_3d:
+            if key == "stack":
+                target = arr
+                break
+
+        if target is None:
+            # 取体素最多的 3D 数组
+            target = max(arrays_3d, key=lambda x: x[1].size)[1]
+
+    # 去单一维度
     target = np.squeeze(target)
     if target.ndim != 3:
         raise ValueError(
