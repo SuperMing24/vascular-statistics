@@ -34,6 +34,7 @@ _module_imports = {
     "NormalizeStrategy": ("vascular_statistics.segmentation.preprocess", "NormalizeStrategy"),
     "run_segmentation":  ("vascular_statistics.segmentation.inference", "run_segmentation"),
     "load_mask":         ("vascular_statistics.segmentation.postprocess", "load_mask"),
+    "crop_mask":         ("vascular_statistics.segmentation.postprocess", "crop_mask"),
     "mask_stats":        ("vascular_statistics.segmentation.postprocess", "mask_stats"),
     "remove_small_components": ("vascular_statistics.segmentation.postprocess", "remove_small_components"),
     "segment_mat":       ("vascular_statistics.segmentation._pipeline", "segment_mat"),

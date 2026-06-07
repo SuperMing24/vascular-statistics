@@ -59,7 +59,7 @@ def segment_mat(
         nii_path = os.path.join(tempfile.gettempdir(), stem + "_seg_tmp.nii")
 
     try:
-        mat_to_nii(mat_path, nii_path)
+        _, original_shape = mat_to_nii(mat_path, nii_path)
 
         # ── 步骤 2: 可选归一化 ──
         if normalize != "passthrough":
@@ -79,15 +79,20 @@ def segment_mat(
             timeout_sec=timeout_sec,
         )
 
-        # ── 步骤 4: 可选后处理 ──
+        # ── 步骤 4: 裁剪回原始尺寸（去除 padding 区域的假信号）──
+        from vascular_statistics.segmentation.postprocess import (
+            load_mask,
+            crop_mask,
+            remove_small_components,
+        )
+        mask = load_mask(tif_path)
+        mask = crop_mask(mask, original_shape)
+
+        # ── 步骤 5: 可选后处理 ──
         if min_component_size > 0:
-            from vascular_statistics.segmentation.postprocess import (
-                load_mask,
-                remove_small_components,
-            )
-            mask = load_mask(tif_path)
             mask = remove_small_components(mask, min_size=min_component_size)
-            _save_mask_tif(mask, tif_path)
+
+        _save_mask_tif(mask, tif_path)
 
         return tif_path
 

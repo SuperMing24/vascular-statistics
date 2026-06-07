@@ -72,6 +72,23 @@ def mask_stats(mask: np.ndarray) -> dict:
     return stats
 
 
+def crop_mask(
+    mask: np.ndarray,
+    original_shape: tuple,
+) -> np.ndarray:
+    """将 padding 后的掩码裁剪回原始尺寸。
+
+    参数：
+        mask: [H_pad, W_pad, D_pad] bool 数组。
+        original_shape: (H, W, D) 原始尺寸元组。
+
+    返回：
+        裁剪后的 [H, W, D] bool 数组。
+    """
+    h, w, d = original_shape
+    return mask[:h, :w, :d]
+
+
 def remove_small_components(
     mask: np.ndarray,
     min_size: int = 100,

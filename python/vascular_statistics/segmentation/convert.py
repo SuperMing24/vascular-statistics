@@ -16,17 +16,22 @@ def mat_to_nii(
     mat_path: str,
     nii_path: Optional[str] = None,
     array_key: Optional[str] = None,
-) -> str:
+    pad_to_multiple: int = 32,
+) -> tuple[str, tuple]:
     """将 .mat 文件中的 3D 数组转换为 .nii 文件。
 
     参数：
         mat_path: .mat 文件路径。
         nii_path: 输出 .nii 路径。默认与输入同名（改后缀为 .nii）。
         array_key: .mat 中目标数组的键名。
-                   默认取第一个非 __ 前缀的 numpy 数组。
+        pad_to_multiple: padding 对齐倍数（默认 32 = MONAI DynamicUNet stride）。
+                         0 = 不做 padding。
 
     返回：
-        输出 .nii 文件的绝对路径。
+        (nii_path, original_shape) —
+        nii_path: 输出 .nii 文件的绝对路径。
+        original_shape: padding 前的原始 (H, W, D) 形状。
+                       推理后需将掩码裁剪回此尺寸。
 
     异常：
         FileNotFoundError: .mat 文件不存在。
@@ -95,17 +100,20 @@ def mat_to_nii(
     # 转换为 float32（NIfTI 标准精度，兼容 predict.py 的 float32 加载）
     data = target.astype(np.float32)
 
-    # Padding 到 32 的倍数 —— MONAI DynamicUNet 有 5 层下采样（stride=32），
+    # 记录原始形状（推理后需裁剪回此尺寸）
+    original_shape = data.shape
+
+    # Padding 到指定倍数 —— MONAI DynamicUNet 有 5 层下采样（stride=32），
     # MiniVess 训练数据都是 512×512（整除 32），但 VascStats 样本尺寸各异。
-    # 不做 padding 会在 decoder skip connection 中出现
-    # "Expected size 24 but got size 23" 错误。
-    h, w, d = data.shape
-    pad_h = (32 - h % 32) % 32
-    pad_w = (32 - w % 32) % 32
-    pad_d = (32 - d % 32) % 32
-    if pad_h > 0 or pad_w > 0 or pad_d > 0:
-        data = np.pad(data, ((0, pad_h), (0, pad_w), (0, pad_d)),
-                      mode='constant', constant_values=0.0)
+    # 不做 padding 会在 decoder skip connection 中出现尺寸不匹配错误。
+    if pad_to_multiple > 0:
+        h, w, d = data.shape
+        pad_h = (pad_to_multiple - h % pad_to_multiple) % pad_to_multiple
+        pad_w = (pad_to_multiple - w % pad_to_multiple) % pad_to_multiple
+        pad_d = (pad_to_multiple - d % pad_to_multiple) % pad_to_multiple
+        if pad_h > 0 or pad_w > 0 or pad_d > 0:
+            data = np.pad(data, ((0, pad_h), (0, pad_w), (0, pad_d)),
+                          mode='constant', constant_values=0.0)
 
     # 确定输出路径
     if nii_path is None:
@@ -120,7 +128,7 @@ def mat_to_nii(
     nii = nib.Nifti1Image(data, affine)
     nib.save(nii, nii_path)
 
-    return str(Path(nii_path).resolve())
+    return str(Path(nii_path).resolve()), original_shape
 
 
 def mat_info(mat_path: str) -> dict:
