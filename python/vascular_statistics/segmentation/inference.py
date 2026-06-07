@@ -123,15 +123,14 @@ def run_segmentation(
     )
 
     if result.returncode != 0:
-        msg = (
-            f"predict.py 推理失败 (exit={result.returncode})\n"
-            f"STDERR: {result.stderr[-1000:]}\n"
-            f"STDOUT: {result.stdout[-500:]}"
-        )
-        raise subprocess.CalledProcessError(
-            result.returncode, cmd,
-            output=result.stdout,
-            stderr=result.stderr,
+        import sys as _sys
+        print(f"[inference] predict.py stderr:", file=_sys.stderr)
+        print(result.stderr[-2000:], file=_sys.stderr)
+        print(f"[inference] predict.py stdout (last 500 chars):", file=_sys.stderr)
+        print(result.stdout[-500:], file=_sys.stderr)
+        raise RuntimeError(
+            f"predict.py 推理失败 (exit={result.returncode})。"
+            f"详情见上方 stderr 输出。"
         )
 
     if not os.path.exists(out_tif):
