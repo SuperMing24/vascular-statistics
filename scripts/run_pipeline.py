@@ -84,7 +84,11 @@ def run(
             stack = ReadStackMat(input_path).GetOutput()
         elif input_path.endswith((".tif", ".tiff")):
             import skimage.io as skio
+            import numpy as np
             stack = skio.imread(input_path)
+            # TIFF 多页格式为 [D, H, W]，骨架化期望 [H, W, D]
+            if stack.ndim == 3:
+                stack = np.transpose(stack, (1, 2, 0))
             stack = (stack > 0).astype(int)
         else:
             raise ValueError(f"不支持的格式: {input_path}")

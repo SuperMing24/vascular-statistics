@@ -131,7 +131,11 @@ def skeletonize(input, output, sampling, speed, dist, med):
         stack = ReadStackMat(input).GetOutput()
     elif input.endswith((".tif", ".tiff")):
         import skimage.io as skio
+        import numpy as np
         stack = skio.imread(input)
+        # TIFF 多页格式为 [D, H, W]，骨架化期望 [H, W, D]
+        if stack.ndim == 3:
+            stack = np.transpose(stack, (1, 2, 0))
         stack = (stack > 0).astype(int)
     else:
         click.echo("不支持的输入格式。请使用 .mat 或 .tif 文件。", err=True)
