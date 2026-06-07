@@ -93,30 +93,20 @@ def run_segmentation(
 
     predict_script = _find_predict_script()
 
-    # 构建命令：
-    # conda run -n vesseg python predict.py --exp_dir ... --input ... --out ... --threshold ...
+    # 直接使用 vesseg 环境的 Python 解释器
+    # （避免 conda run 在 srun 计算节点上初始化失败）
+    python_exe = os.path.join(_CONDA_ENV, "bin", "python")
+    if not os.path.exists(python_exe):
+        python_exe = sys.executable  # 回退到当前 Python
+
     cmd = [
-        "conda", "run", "-n", os.path.basename(_CONDA_ENV),
-        "python", predict_script,
+        python_exe, predict_script,
         "--exp_dir", exp_dir,
         "--input", nii_path,
         "--out", out_tif,
         "--threshold", str(threshold),
         "--device", device,
     ]
-
-    # 如果 conda 不可用，回退到直接 python 调用（依赖当前环境）
-    try:
-        subprocess.run(["conda", "--version"], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        cmd = [
-            sys.executable, predict_script,
-            "--exp_dir", exp_dir,
-            "--input", nii_path,
-            "--out", out_tif,
-            "--threshold", str(threshold),
-            "--device", device,
-        ]
 
     result = subprocess.run(
         cmd,
