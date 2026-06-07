@@ -95,6 +95,18 @@ def mat_to_nii(
     # 转换为 float32（NIfTI 标准精度，兼容 predict.py 的 float32 加载）
     data = target.astype(np.float32)
 
+    # Padding 到 32 的倍数 —— MONAI DynamicUNet 有 5 层下采样（stride=32），
+    # MiniVess 训练数据都是 512×512（整除 32），但 VascStats 样本尺寸各异。
+    # 不做 padding 会在 decoder skip connection 中出现
+    # "Expected size 24 but got size 23" 错误。
+    h, w, d = data.shape
+    pad_h = (32 - h % 32) % 32
+    pad_w = (32 - w % 32) % 32
+    pad_d = (32 - d % 32) % 32
+    if pad_h > 0 or pad_w > 0 or pad_d > 0:
+        data = np.pad(data, ((0, pad_h), (0, pad_w), (0, pad_d)),
+                      mode='constant', constant_values=0.0)
+
     # 确定输出路径
     if nii_path is None:
         stem = Path(mat_path).stem
