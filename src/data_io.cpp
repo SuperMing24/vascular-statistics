@@ -198,14 +198,21 @@ bool GenerateStatistics(const std::string& edges_file,
                         dz = vessel_start_z - vessel_end_z;
                         path_direct_distance = std::sqrt(dx * dx + dy * dy + dz * dz);
                         out3 << path_length << "\n";
-                        out4 << path_length / path_direct_distance << "\n";
+                        // 防止直连距离为 0 时产生 inf/NaN（孤立的单节点段）
+                        if (path_direct_distance < 1e-10) {
+                            out4 << "1.0\n";
+                        } else {
+                            out4 << path_length / path_direct_distance << "\n";
+                        }
 
                         if (k > 2 && avg_temp >= 2.5) {
                             no_effective_seg++;
                             avg_seg_radius -= (avg_seg_radius - avg_temp) / no_effective_seg;
                             avg_seg_length -= (avg_seg_length - path_length) / no_effective_seg;
-                            avg_seg_tortuosity -=
-                                (avg_seg_tortuosity - path_length / path_direct_distance) / no_effective_seg;
+                            if (path_direct_distance >= 1e-10) {
+                                avg_seg_tortuosity -=
+                                    (avg_seg_tortuosity - path_length / path_direct_distance) / no_effective_seg;
+                            }
                         }
                         break;
                     }
@@ -243,14 +250,20 @@ bool GenerateStatistics(const std::string& edges_file,
                         dz = vessel_start_z - vessel_end_z;
                         path_direct_distance = std::sqrt(dx * dx + dy * dy + dz * dz);
                         out3 << path_length << "\n";
-                        out4 << path_length / path_direct_distance << "\n";
+                        if (path_direct_distance < 1e-10) {
+                            out4 << "1.0\n";
+                        } else {
+                            out4 << path_length / path_direct_distance << "\n";
+                        }
 
                         if (k > 2 && avg_temp >= 2.5) {
                             no_effective_seg++;
                             avg_seg_radius -= (avg_seg_radius - avg_temp) / no_effective_seg;
                             avg_seg_length -= (avg_seg_length - path_length) / no_effective_seg;
-                            avg_seg_tortuosity -=
-                                (avg_seg_tortuosity - path_length / path_direct_distance) / no_effective_seg;
+                            if (path_direct_distance >= 1e-10) {
+                                avg_seg_tortuosity -=
+                                    (avg_seg_tortuosity - path_length / path_direct_distance) / no_effective_seg;
+                            }
                         }
                         break;
                     }
