@@ -95,7 +95,7 @@ def run_segmentation(
     # conda run -n vesseg python predict.py --exp_dir ... --input ... --out ... --threshold ...
     cmd = [
         "conda", "run", "-n", os.path.basename(_CONDA_ENV),
-        sys.executable, predict_script,
+        "python", predict_script,
         "--exp_dir", exp_dir,
         "--input", nii_path,
         "--out", out_tif,
@@ -123,6 +123,11 @@ def run_segmentation(
     )
 
     if result.returncode != 0:
+        msg = (
+            f"predict.py 推理失败 (exit={result.returncode})\n"
+            f"STDERR: {result.stderr[-1000:]}\n"
+            f"STDOUT: {result.stdout[-500:]}"
+        )
         raise subprocess.CalledProcessError(
             result.returncode, cmd,
             output=result.stdout,
