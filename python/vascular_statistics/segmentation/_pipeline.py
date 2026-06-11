@@ -5,6 +5,7 @@
 __getattr__ 延迟加载机制访问，避免本地环境缺少 nibabel/tifffile 时导入失败。
 """
 
+import hashlib
 import os
 import tempfile
 from pathlib import Path
@@ -52,11 +53,16 @@ def segment_mat(
 
     # ── 步骤 1: .mat → .nii ──
     stem = Path(mat_path).stem
+    # 使用全路径哈希确保不同样本（即使 crop 坐标相同）使用不同临时文件，
+    # 避免同节点并发执行时的文件名冲突。
+    # 保留 stem 前缀便于调试，hash 后缀保证唯一性。
+    path_hash = hashlib.md5(str(Path(mat_path).resolve()).encode()).hexdigest()[:8]
     if keep_nii:
-        nii_path = os.path.join(output_dir, stem + ".nii")
+        nii_path = os.path.join(output_dir, f"{stem}_{path_hash}.nii")
     else:
-        # 使用可预测的临时文件名（避免 predict.py 输出带随机后缀）
-        nii_path = os.path.join(tempfile.gettempdir(), stem + "_seg_tmp.nii")
+        nii_path = os.path.join(
+            tempfile.gettempdir(), f"{stem}_{path_hash}_seg_tmp.nii"
+        )
 
     try:
         _, original_shape = mat_to_nii(mat_path, nii_path)

@@ -22,6 +22,7 @@
 """
 
 import json
+import math
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -168,8 +169,14 @@ def compute_micro_stats(
     # 此处直接从明细文件取均值，口径保持一致。
     avg_length = sum(micro_lengths) / n_micro
 
-    # 平均弯曲度
-    avg_tortuosity = sum(micro_torts) / n_micro
+    # 平均弯曲度（过滤旧 C++ 运行中 path_direct_distance=0 产生的 inf/NaN）
+    valid_torts = [t for t in micro_torts if not (math.isnan(t) or math.isinf(t))]
+    n_valid_torts = len(valid_torts)
+    if n_valid_torts > 0:
+        avg_tortuosity = sum(valid_torts) / n_valid_torts
+    else:
+        avg_tortuosity = float("nan")
+    n_invalid_torts = n_micro - n_valid_torts
 
     # 段密度 = 微血管段数 / 组织体积
     segment_density = n_micro / volume if volume > 0 else float("nan")
@@ -182,6 +189,7 @@ def compute_micro_stats(
         "avg_tortuosity_au": avg_tortuosity,
         "segment_density_per_mm3": segment_density,
         "volume_mm3": volume,
+        "n_invalid_tortuosity": n_invalid_torts,
         # 过滤后的明细（供写入）
         "micro_radii": micro_radii,
         "micro_lengths": micro_lengths,
@@ -236,6 +244,14 @@ def write_micro_stats(
     n_micro = stats["n_segments_micro"]
     n_total = stats["n_segments_total"]
 
+    n_invalid = stats.get("n_invalid_tortuosity", 0)
+    invalid_note = ""
+    if n_invalid > 0:
+        invalid_note = (
+            f"\n注：{n_invalid} 个微血管段的弯曲度为 inf/NaN（旧 C++ 运行中 "
+            f"path_direct_distance=0 所致），已从弯曲度均值计算中排除。"
+        )
+
     lines = [
         "Vascular_Statistics — 单次运行微血管统计（直径 < 10 μm）",
         "",
@@ -247,6 +263,7 @@ def write_micro_stats(
         f"注：仅统计直径 < 10 μm 且节点数 >= 3 的微血管段。",
         f"总段数: {n_total}，微血管段数: {n_micro}",
         f"组织体积: {stats['volume_mm3']} mm³",
+        invalid_note,
     ]
 
     with open(summary_path, "w", encoding="utf-8") as f:
