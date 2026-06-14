@@ -116,7 +116,7 @@ set -euo pipefail
 # --- 路径配置 ---
 PROJECT_DIR="/share/home/sukm/vascular-statistics"
 DATA_ROOT="/share/home/sukm/datasets/VascStats"
-OUTPUT_ROOT="/share/home/sukm/experiments/vascstats"
+OUTPUT_ROOT="/share/home/sukm/experiments/vs_vascstats"
 
 # --- 作业参数 ---
 # 用法：sbatch scripts/pipeline.slurm <input> <volume> [output_stem] [sampling] [phases]
