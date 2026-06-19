@@ -1,9 +1,48 @@
 #include "vascular_statistics/data_io.h"
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <iostream>
 #include <vector>
+
+namespace {
+
+// 中位数（接收副本，内部排序）。
+double Median(std::vector<double> values) {
+    if (values.empty()) return 0.0;
+    std::sort(values.begin(), values.end());
+    const size_t n = values.size();
+    if (n % 2 == 0) return (values[n / 2 - 1] + values[n / 2]) / 2.0;
+    return values[n / 2];
+}
+
+// 算术平均。
+double Mean(const std::vector<double>& values) {
+    if (values.empty()) return 0.0;
+    double sum = 0.0;
+    for (double v : values) sum += v;
+    return sum / static_cast<double>(values.size());
+}
+
+// MAD（中位数绝对偏差）离群计数：|0.6745 * (x - median) / MAD| > k。
+// 单位无关；MAD 退化为 0（半数以上同值）时不标记任何离群。
+int CountMadOutliers(const std::vector<double>& values, double k) {
+    if (values.size() < 2) return 0;
+    const double med = Median(values);
+    std::vector<double> abs_dev;
+    abs_dev.reserve(values.size());
+    for (double v : values) abs_dev.push_back(std::fabs(v - med));
+    const double mad = Median(abs_dev);
+    if (mad < 1e-10) return 0;
+    int count = 0;
+    for (double v : values) {
+        if (std::fabs(0.6745 * (v - med) / mad) > k) ++count;
+    }
+    return count;
+}
+
+}  // namespace
 
 namespace vessel_stats {
 
@@ -31,26 +70,34 @@ bool GenerateStatistics(const std::string& edges_file,
         return false;
     }
 
+    // 先一次性读入全部浮点数，再据实际行数定尺寸。
+    // Q6 修复：vertices_info 尺寸取「edges 最大编号 idx_max」与「vertices
+    // 实际行数」的较大值，防止存在孤立节点（度=0、不出现在任何边里）时
+    // 按行号写入越界（原实现用 idx_max 定尺寸，孤立高编号节点会溢出）。
+    std::vector<double> raw_vtx;
+    double f;
+    while (in >> f) raw_vtx.push_back(f);
+    in.close();
+
+    const int vtx_rows = static_cast<int>(raw_vtx.size()) / 6;
+    const int n_nodes = (vtx_rows > idx_max) ? vtx_rows : idx_max;
+
     // VerticesInfo[i] = {x, y, z, radius}
-    std::vector<std::vector<double>> vertices_info(idx_max,
+    std::vector<std::vector<double>> vertices_info(n_nodes,
                                                    std::vector<double>(4, 0.0));
 
-    double f;
-    int count = 0;
-    while (in >> f) {
-        int idx = count / 6;
-        int col = count % 6;
+    for (size_t i = 0; i < raw_vtx.size(); ++i) {
+        const int idx = static_cast<int>(i) / 6;
+        const int col = static_cast<int>(i) % 6;
         if (col == 2)       // x
-            vertices_info[idx][0] = f;
+            vertices_info[idx][0] = raw_vtx[i];
         else if (col == 3)  // y
-            vertices_info[idx][1] = f;
+            vertices_info[idx][1] = raw_vtx[i];
         else if (col == 4)  // z
-            vertices_info[idx][2] = f;
+            vertices_info[idx][2] = raw_vtx[i];
         else if (col == 5)  // radius
-            vertices_info[idx][3] = f;
-        count++;
+            vertices_info[idx][3] = raw_vtx[i];
     }
-    in.close();
 
     // ---------- 统计节点度数 ----------
     std::vector<int> degrees(idx_max, 0);
@@ -124,10 +171,11 @@ bool GenerateStatistics(const std::string& edges_file,
     int previous_node, next_node;
     bool end_of_vessel;
     double avg_temp;
-    int no_effective_seg = 0;
-    double avg_seg_radius = 0.0;
-    double avg_seg_length = 0.0;
-    double avg_seg_tortuosity = 0.0;
+    // 有效段（直径>=10μm 且节点数>=3）的逐段值缓存，
+    // 用于遍历结束后计算均值 + 中位数 + 离群标记（轨道 A）。
+    std::vector<double> eff_radii;
+    std::vector<double> eff_lengths;
+    std::vector<double> eff_torts;
 
     double vessel_start_x, vessel_start_y, vessel_start_z;
     double vessel_end_x, vessel_end_y, vessel_end_z;
@@ -206,13 +254,12 @@ bool GenerateStatistics(const std::string& edges_file,
                         }
 
                         if (k > 2 && avg_temp >= 2.5) {
-                            no_effective_seg++;
-                            avg_seg_radius -= (avg_seg_radius - avg_temp) / no_effective_seg;
-                            avg_seg_length -= (avg_seg_length - path_length) / no_effective_seg;
-                            if (path_direct_distance >= 1e-10) {
-                                avg_seg_tortuosity -=
-                                    (avg_seg_tortuosity - path_length / path_direct_distance) / no_effective_seg;
-                            }
+                            eff_radii.push_back(avg_temp);
+                            eff_lengths.push_back(path_length);
+                            eff_torts.push_back(
+                                path_direct_distance < 1e-10
+                                    ? 1.0
+                                    : path_length / path_direct_distance);
                         }
                         break;
                     }
@@ -257,13 +304,12 @@ bool GenerateStatistics(const std::string& edges_file,
                         }
 
                         if (k > 2 && avg_temp >= 2.5) {
-                            no_effective_seg++;
-                            avg_seg_radius -= (avg_seg_radius - avg_temp) / no_effective_seg;
-                            avg_seg_length -= (avg_seg_length - path_length) / no_effective_seg;
-                            if (path_direct_distance >= 1e-10) {
-                                avg_seg_tortuosity -=
-                                    (avg_seg_tortuosity - path_length / path_direct_distance) / no_effective_seg;
-                            }
+                            eff_radii.push_back(avg_temp);
+                            eff_lengths.push_back(path_length);
+                            eff_torts.push_back(
+                                path_direct_distance < 1e-10
+                                    ? 1.0
+                                    : path_length / path_direct_distance);
                         }
                         break;
                     }
@@ -282,12 +328,49 @@ bool GenerateStatistics(const std::string& edges_file,
         }
     }
 
+    // ---------- 计算汇总指标（均值 + 中位数 + 离群标记，轨道 A）----------
+    const int n_eff = static_cast<int>(eff_lengths.size());
+
+    const double mean_radius = Mean(eff_radii);
+    const double mean_length = Mean(eff_lengths);
+    const double mean_tort = Mean(eff_torts);
+    const double median_radius = Median(eff_radii);
+    const double median_length = Median(eff_lengths);
+    const double median_tort = Median(eff_torts);
+
+    // 离群段标记（只标记不剔除）：
+    //   MAD（k=3.5，相对/分布判据，单位无关）
+    //   绝对兜底（600 体素 ≈ 1200μm 当前 ×2 口径，待轨道 B 校准为真 μm）
+    const double kMadK = 3.5;
+    const double kAbsLengthThresholdVoxel = 600.0;
+    const int mad_outliers = CountMadOutliers(eff_lengths, kMadK);
+    int abs_outliers = 0;
+    for (double len : eff_lengths) {
+        if (len > kAbsLengthThresholdVoxel) ++abs_outliers;
+    }
+    const double mad_ratio = n_eff > 0 ? 100.0 * mad_outliers / n_eff : 0.0;
+    const double abs_ratio = n_eff > 0 ? 100.0 * abs_outliers / n_eff : 0.0;
+
     // ---------- 写汇总文件 ----------
-    out5 << "平均直径 (μm): " << avg_seg_radius * 4 << "\n"
-         << "平均长度 (μm): " << avg_seg_length * 2 << "\n"
-         << "段密度 (seg/mm³): " << static_cast<double>(no_effective_seg) / volume << "\n"
-         << "平均弯曲度: " << avg_seg_tortuosity << "\n"
-         << "注：仅统计直径 >= 10 μm 且节点数 >= 3 的血管段\n";
+    out5 << "平均直径 (μm): " << mean_radius * 4 << "\n"
+         << "中位直径 (μm): " << median_radius * 4 << "\n"
+         << "平均长度 (μm): " << mean_length * 2 << "\n"
+         << "中位长度 (μm): " << median_length * 2 << "\n"
+         << "段密度 (seg/mm³): " << static_cast<double>(n_eff) / volume << "\n"
+         << "平均弯曲度: " << mean_tort << "\n"
+         << "中位弯曲度: " << median_tort << "\n"
+         << "有效段数: " << n_eff << "\n"
+         << "MAD 离群段 (k=3.5): " << mad_outliers << " (" << mad_ratio << "%)\n"
+         << "超绝对阈值段 (>600 体素, 待轨道B校准): " << abs_outliers
+         << " (" << abs_ratio << "%)\n";
+    // ⚠️ 由绝对阈值比例驱动：过度连接的真实特征是段长绝对超限。
+    // MAD 比例仅作信息报告——段长分布天然右偏，MAD 在健康样本上也会标出
+    // 长尾的若干百分比（实测正常样本 2RWS 达 4.1%），不宜用作告警触发。
+    if (abs_ratio > 1.0) {
+        out5 << "⚠️ 注意：骨架可能存在过度连接（绝对超长段比例偏高）\n";
+    }
+    out5 << "注：仅统计直径 >= 10 μm 且节点数 >= 3 的血管段；"
+            "中位数抗离群，离群段仅标记不剔除\n";
 
     out1.close();
     out2.close();

@@ -24,6 +24,7 @@
 import json
 import math
 import os
+import statistics
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -35,6 +36,28 @@ from typing import Any, Dict, List, Optional, Tuple
 # 微血管取反：半径 < 2.5 μm。
 MICRO_RADIUS_THRESHOLD = 2.5
 MICRO_MIN_NODES = 3  # 与 C++ 一致：k > 2 即至少 3 个节点
+
+# 离群段标记（与 C++ data_io.cpp 一致，轨道 A）。
+# micro 段同样可能含人工/自动产生的超长过渡连接，须一并防范。
+MAD_K = 3.5  # Iglewicz-Hoaglin 修正 z 分数阈值（相对判据，单位无关）
+ABS_LENGTH_THRESHOLD_VOXEL = 600.0  # 绝对兜底（≈1200μm 当前口径，待轨道B校准）
+
+# C++ 明细文件中的 path_length 为体素距离；汇总输出 μm 时 ×2（与 C++ 宏观口径一致）。
+LENGTH_VOXEL_TO_UM = 2.0
+
+
+def _mad_outlier_count(values: List[float], k: float = MAD_K) -> int:
+    """MAD（中位数绝对偏差）离群计数：|0.6745*(x-median)/MAD| > k。
+
+    单位无关；MAD 退化为 0（半数以上同值）或样本不足 2 时不标记任何离群。
+    """
+    if len(values) < 2:
+        return 0
+    med = statistics.median(values)
+    mad = statistics.median([abs(x - med) for x in values])
+    if mad < 1e-10:
+        return 0
+    return sum(1 for x in values if abs(0.6745 * (x - med) / mad) > k)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -159,37 +182,54 @@ def compute_micro_stats(
 
     n_micro = len(micro_radii)
 
-    # 平均直径 = 平均半径 × 4（与 C++ 输出口径一致）
+    # 平均/中位直径 = 半径 × 4（与 C++ 输出口径一致）
     avg_radius = sum(micro_radii) / n_micro
     avg_diameter = avg_radius * 4.0
+    median_diameter = statistics.median(micro_radii) * 4.0
 
-    # 平均长度（C++ 输出 avg_seg_length * 2，但这里的 path_length
-    # 是 C++ 已计算的路径长度，直接取均值即可）
-    # 注意：C++ 中 avg_seg_length 是 running average，输出时 * 2。
-    # 此处直接从明细文件取均值，口径保持一致。
-    avg_length = sum(micro_lengths) / n_micro
+    # 平均/中位长度。
+    # 修复（轨道 A）：明细文件中的 path_length 是体素距离，汇总 μm 时须 ×2，
+    # 与 C++ 宏观 statistics_summary.txt 的 avg_seg_length*2 口径对齐
+    # （此前未乘 ×2，导致 micro 长度比宏观小一半）。
+    avg_length = sum(micro_lengths) / n_micro * LENGTH_VOXEL_TO_UM
+    median_length = statistics.median(micro_lengths) * LENGTH_VOXEL_TO_UM
 
-    # 平均弯曲度（过滤旧 C++ 运行中 path_direct_distance=0 产生的 inf/NaN）
+    # 平均/中位弯曲度（过滤旧 C++ 运行中 path_direct_distance=0 产生的 inf/NaN）
     valid_torts = [t for t in micro_torts if not (math.isnan(t) or math.isinf(t))]
     n_valid_torts = len(valid_torts)
     if n_valid_torts > 0:
         avg_tortuosity = sum(valid_torts) / n_valid_torts
+        median_tortuosity = statistics.median(valid_torts)
     else:
         avg_tortuosity = float("nan")
+        median_tortuosity = float("nan")
     n_invalid_torts = n_micro - n_valid_torts
 
     # 段密度 = 微血管段数 / 组织体积
     segment_density = n_micro / volume if volume > 0 else float("nan")
 
+    # 离群段标记（只标记不剔除，对原始体素长度计算）。
+    mad_outliers = _mad_outlier_count(micro_lengths, MAD_K)
+    abs_outliers = sum(1 for x in micro_lengths if x > ABS_LENGTH_THRESHOLD_VOXEL)
+    mad_ratio = 100.0 * mad_outliers / n_micro if n_micro > 0 else 0.0
+    abs_ratio = 100.0 * abs_outliers / n_micro if n_micro > 0 else 0.0
+
     return {
         "n_segments_total": len(radii),
         "n_segments_micro": n_micro,
         "avg_diameter_um": avg_diameter,
+        "median_diameter_um": median_diameter,
         "avg_length_um": avg_length,
+        "median_length_um": median_length,
         "avg_tortuosity_au": avg_tortuosity,
+        "median_tortuosity_au": median_tortuosity,
         "segment_density_per_mm3": segment_density,
         "volume_mm3": volume,
         "n_invalid_tortuosity": n_invalid_torts,
+        "mad_outliers": mad_outliers,
+        "abs_outliers": abs_outliers,
+        "mad_ratio": mad_ratio,
+        "abs_ratio": abs_ratio,
         # 过滤后的明细（供写入）
         "micro_radii": micro_radii,
         "micro_lengths": micro_lengths,
@@ -252,15 +292,29 @@ def write_micro_stats(
             f"path_direct_distance=0 所致），已从弯曲度均值计算中排除。"
         )
 
+    # ⚠️ 由绝对阈值比例驱动（见 data_io.cpp 同处说明）：MAD 在天然右偏的段长
+    # 分布上会误标长尾，仅作信息报告；过度连接由绝对超长段比例触发告警。
+    warn_note = ""
+    if stats["abs_ratio"] > 1.0:
+        warn_note = "⚠️ 注意：骨架可能存在过度连接（绝对超长段比例偏高）"
+
     lines = [
         "Vascular_Statistics — 单次运行微血管统计（直径 < 10 μm）",
         "",
         f"平均直径 (μm): {stats['avg_diameter_um']:.6f}",
+        f"中位直径 (μm): {stats['median_diameter_um']:.6f}",
         f"平均长度 (μm): {stats['avg_length_um']:.6f}",
+        f"中位长度 (μm): {stats['median_length_um']:.6f}",
         f"段密度 (seg/mm³): {stats['segment_density_per_mm3']:.6f}",
         f"平均弯曲度: {stats['avg_tortuosity_au']:.6f}",
+        f"中位弯曲度: {stats['median_tortuosity_au']:.6f}",
+        f"MAD 离群段 (k={MAD_K}): {stats['mad_outliers']} ({stats['mad_ratio']:.4f}%)",
+        f"超绝对阈值段 (>{ABS_LENGTH_THRESHOLD_VOXEL:.0f} 体素, 待轨道B校准): "
+        f"{stats['abs_outliers']} ({stats['abs_ratio']:.4f}%)",
+        warn_note,
         "",
-        f"注：仅统计直径 < 10 μm 且节点数 >= 3 的微血管段。",
+        f"注：仅统计直径 < 10 μm 且节点数 >= 3 的微血管段；"
+        f"中位数抗离群，离群段仅标记不剔除。",
         f"总段数: {n_total}，微血管段数: {n_micro}",
         f"组织体积: {stats['volume_mm3']} mm³",
         invalid_note,
