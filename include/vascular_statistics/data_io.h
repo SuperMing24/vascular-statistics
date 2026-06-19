@@ -15,9 +15,16 @@ namespace vessel_stats {
 ///   generate_vessel_path_length.txt — 各段路径长度
 ///   generate_vessel_tortuosity.txt  — 各段弯曲度
 ///   statistics_summary.txt          — 汇总统计
+/// spacing（sx,sy,sz, μm/体素）：三者均 > 0 时启用各向异性物理单位
+/// （距离逐轴加权得 μm；半径→μm 标量 = (sx+sy)/2 XY 均值）。
+/// 任一 <= 0（默认）→ legacy 各向同性模式（×2 长度 / ×4 直径 / 2.5 体素阈值），
+/// 保持与历史输出口径一致。
 bool GenerateStatistics(const std::string& edges_file,
                         const std::string& vertices_file,
-                        double volume);
+                        double volume,
+                        double sx = -1.0,
+                        double sy = -1.0,
+                        double sz = -1.0);
 
 }  // namespace vessel_stats
 

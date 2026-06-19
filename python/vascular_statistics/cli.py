@@ -75,7 +75,12 @@ def convert(pajek, output_dir):
     default=None,
     help="C++ vessel_stats.exe 路径（默认在 build/ 中查找）",
 )
-def stats(stem, volume, exe):
+@click.option(
+    "--spacing", default=None,
+    help="体素 spacing 'sx,sy,sz' (μm/体素)，启用各向异性物理单位口径；"
+         "缺省走 legacy 各向同性(×2/×4)。",
+)
+def stats(stem, volume, exe, spacing):
     """对已转换的平面格式文件运行 C++ 统计。
 
     STEM: 边/节点文件的前缀（不含 _edges/_vertices 和 .txt 后缀）。
@@ -101,6 +106,12 @@ def stats(stem, volume, exe):
             raise click.Abort()
 
     cmd = [exe, stem + "_edges", stem + "_vertices", str(volume)]
+    if spacing:
+        parts = [p.strip() for p in spacing.split(",")]
+        if len(parts) != 3:
+            click.echo("--spacing 须为 'sx,sy,sz' 三个值。", err=True)
+            raise click.Abort()
+        cmd += parts  # sx sy sz → 各向异性模式
     click.echo(f"执行: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=False)
     if result.returncode != 0:

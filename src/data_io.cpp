@@ -42,13 +42,25 @@ int CountMadOutliers(const std::vector<double>& values, double k) {
     return count;
 }
 
+// 各向异性 3D 距离：各轴差值乘以体素 spacing 后求模。
+// legacy（各向同性）模式传 sx=sy=sz=1.0 即退化为体素欧氏距离。
+double Dist3D(double dx, double dy, double dz, double sx, double sy, double sz) {
+    dx *= sx;
+    dy *= sy;
+    dz *= sz;
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
 }  // namespace
 
 namespace vessel_stats {
 
 bool GenerateStatistics(const std::string& edges_file,
                         const std::string& vertices_file,
-                        double volume) {
+                        double volume,
+                        double sx,
+                        double sy,
+                        double sz) {
     // ---------- 第 1 遍：打开边文件，找最大节点编号 ----------
     std::ifstream in(edges_file + ".txt");
     if (!in) {
@@ -166,6 +178,21 @@ bool GenerateStatistics(const std::string& edges_file,
 
     out5 << "Vascular_Statistics — 单次运行统计\n";
 
+    // ---------- 单位模式（轨道 B）----------
+    // 提供 spacing（sx,sy,sz 均 > 0）→ 各向异性物理单位（μm）：
+    //   距离逐轴加权；半径→μm 标量 r_scale = (sx+sy)/2（XY 均值，横截面在面内成像）。
+    // 未提供 → legacy 各向同性（沿用 ×2 长度 / ×4 直径 / 2.5 体素阈值），向后兼容。
+    const bool anisotropic = (sx > 0.0 && sy > 0.0 && sz > 0.0);
+    const double ex = anisotropic ? sx : 1.0;
+    const double ey = anisotropic ? sy : 1.0;
+    const double ez = anisotropic ? sz : 1.0;
+    const double r_scale = anisotropic ? (sx + sy) / 2.0 : 2.0;
+    const double length_um_factor = anisotropic ? 1.0 : 2.0;
+    // 有效段半径阈值（体素）：锁住直径 10μm → radius ≥ 10/(2·r_scale)。legacy→2.5。
+    const double radius_threshold_voxel = 10.0 / (2.0 * r_scale);
+    // 绝对兜底：各向异性下 path_length 已是 μm → 1200μm；legacy 为体素 → 600。
+    const double abs_length_threshold = anisotropic ? 1200.0 : 600.0;
+
     // ---------- 段遍历 ----------
     int select_node = 0;
     int previous_node, next_node;
@@ -229,7 +256,7 @@ bool GenerateStatistics(const std::string& edges_file,
                     double dx = vertices_info[previous_node - 1][0] - vertices_info[next_node - 1][0];
                     double dy = vertices_info[previous_node - 1][1] - vertices_info[next_node - 1][1];
                     double dz = vertices_info[previous_node - 1][2] - vertices_info[next_node - 1][2];
-                    path_length += std::sqrt(dx * dx + dy * dy + dz * dz);
+                    path_length += Dist3D(dx, dy, dz, ex, ey, ez);
 
                     previous_node = next_node;
                     edge_array[i][2] = 0;
@@ -244,7 +271,7 @@ bool GenerateStatistics(const std::string& edges_file,
                         dx = vessel_start_x - vessel_end_x;
                         dy = vessel_start_y - vessel_end_y;
                         dz = vessel_start_z - vessel_end_z;
-                        path_direct_distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+                        path_direct_distance = Dist3D(dx, dy, dz, ex, ey, ez);
                         out3 << path_length << "\n";
                         // 防止直连距离为 0 时产生 inf/NaN（孤立的单节点段）
                         if (path_direct_distance < 1e-10) {
@@ -253,7 +280,7 @@ bool GenerateStatistics(const std::string& edges_file,
                             out4 << path_length / path_direct_distance << "\n";
                         }
 
-                        if (k > 2 && avg_temp >= 2.5) {
+                        if (k > 2 && avg_temp >= radius_threshold_voxel) {
                             eff_radii.push_back(avg_temp);
                             eff_lengths.push_back(path_length);
                             eff_torts.push_back(
@@ -280,7 +307,7 @@ bool GenerateStatistics(const std::string& edges_file,
                     double dx = vertices_info[previous_node - 1][0] - vertices_info[next_node - 1][0];
                     double dy = vertices_info[previous_node - 1][1] - vertices_info[next_node - 1][1];
                     double dz = vertices_info[previous_node - 1][2] - vertices_info[next_node - 1][2];
-                    path_length += std::sqrt(dx * dx + dy * dy + dz * dz);
+                    path_length += Dist3D(dx, dy, dz, ex, ey, ez);
 
                     previous_node = next_node;
                     edge_array[i][2] = 0;
@@ -295,7 +322,7 @@ bool GenerateStatistics(const std::string& edges_file,
                         dx = vessel_start_x - vessel_end_x;
                         dy = vessel_start_y - vessel_end_y;
                         dz = vessel_start_z - vessel_end_z;
-                        path_direct_distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+                        path_direct_distance = Dist3D(dx, dy, dz, ex, ey, ez);
                         out3 << path_length << "\n";
                         if (path_direct_distance < 1e-10) {
                             out4 << "1.0\n";
@@ -303,7 +330,7 @@ bool GenerateStatistics(const std::string& edges_file,
                             out4 << path_length / path_direct_distance << "\n";
                         }
 
-                        if (k > 2 && avg_temp >= 2.5) {
+                        if (k > 2 && avg_temp >= radius_threshold_voxel) {
                             eff_radii.push_back(avg_temp);
                             eff_lengths.push_back(path_length);
                             eff_torts.push_back(
@@ -340,28 +367,31 @@ bool GenerateStatistics(const std::string& edges_file,
 
     // 离群段标记（只标记不剔除）：
     //   MAD（k=3.5，相对/分布判据，单位无关）
-    //   绝对兜底（600 体素 ≈ 1200μm 当前 ×2 口径，待轨道 B 校准为真 μm）
+    //   绝对兜底：各向异性下 path_length 为 μm → 1200μm；legacy 为体素 → 600
     const double kMadK = 3.5;
-    const double kAbsLengthThresholdVoxel = 600.0;
     const int mad_outliers = CountMadOutliers(eff_lengths, kMadK);
     int abs_outliers = 0;
     for (double len : eff_lengths) {
-        if (len > kAbsLengthThresholdVoxel) ++abs_outliers;
+        if (len > abs_length_threshold) ++abs_outliers;
     }
     const double mad_ratio = n_eff > 0 ? 100.0 * mad_outliers / n_eff : 0.0;
     const double abs_ratio = n_eff > 0 ? 100.0 * abs_outliers / n_eff : 0.0;
 
     // ---------- 写汇总文件 ----------
-    out5 << "平均直径 (μm): " << mean_radius * 4 << "\n"
-         << "中位直径 (μm): " << median_radius * 4 << "\n"
-         << "平均长度 (μm): " << mean_length * 2 << "\n"
-         << "中位长度 (μm): " << median_length * 2 << "\n"
+    const std::string unit_note = anisotropic
+        ? "（各向异性 spacing 物理单位）"
+        : "（legacy 各向同性 2μm/体素）";
+    out5 << "平均直径 (μm): " << mean_radius * 2.0 * r_scale << "\n"
+         << "中位直径 (μm): " << median_radius * 2.0 * r_scale << "\n"
+         << "平均长度 (μm): " << mean_length * length_um_factor << "\n"
+         << "中位长度 (μm): " << median_length * length_um_factor << "\n"
          << "段密度 (seg/mm³): " << static_cast<double>(n_eff) / volume << "\n"
          << "平均弯曲度: " << mean_tort << "\n"
          << "中位弯曲度: " << median_tort << "\n"
          << "有效段数: " << n_eff << "\n"
          << "MAD 离群段 (k=3.5): " << mad_outliers << " (" << mad_ratio << "%)\n"
-         << "超绝对阈值段 (>600 体素, 待轨道B校准): " << abs_outliers
+         << "超绝对阈值段 (>" << abs_length_threshold
+         << (anisotropic ? " μm" : " 体素") << "): " << abs_outliers
          << " (" << abs_ratio << "%)\n";
     // ⚠️ 由绝对阈值比例驱动：过度连接的真实特征是段长绝对超限。
     // MAD 比例仅作信息报告——段长分布天然右偏，MAD 在健康样本上也会标出
@@ -370,7 +400,8 @@ bool GenerateStatistics(const std::string& edges_file,
         out5 << "⚠️ 注意：骨架可能存在过度连接（绝对超长段比例偏高）\n";
     }
     out5 << "注：仅统计直径 >= 10 μm 且节点数 >= 3 的血管段；"
-            "中位数抗离群，离群段仅标记不剔除\n";
+            "中位数抗离群，离群段仅标记不剔除；单位口径"
+         << unit_note << "\n";
 
     out1.close();
     out2.close();
