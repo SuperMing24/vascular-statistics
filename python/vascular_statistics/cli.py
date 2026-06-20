@@ -655,8 +655,8 @@ from vascular_statistics.subrange_stats import DIAMETER_SUFFIX
 def diameter_stats_cmd(output_root, sample_key):
     """为所有已完成骨架化的 run 生成子范围（0-10 um）统计。
 
-    从已有 generate_vessel_radius.txt / generate_vessel_path_length.txt /
-    generate_vessel_tortuosity.txt 中提取直径 < 10 um 的血管段，
+    从已有 generate_vessel_radius_d10+um.txt / generate_vessel_path_length_d10+um.txt /
+    generate_vessel_tortuosity_d10+um.txt 中提取直径 < 10 um 的血管段，
     写入新的 _d0-10um 后缀文件，不覆盖原有统计。
 
     幂等：已有 statistics_summary_d0-10um.txt 的 run 将自动跳过。

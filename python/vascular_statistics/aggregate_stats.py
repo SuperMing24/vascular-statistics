@@ -36,7 +36,9 @@ def parse_run_statistics(run_dir: str, suffix: str = SUFFIX_D10_PLUS) -> Optiona
     if not os.path.exists(stats_path) and suffix == SUFFIX_D10_PLUS:
         stats_path = os.path.join(run_dir, "statistics_summary.txt")
     meta_path = os.path.join(run_dir, "run_meta.json")
-    vessel_path = os.path.join(run_dir, "generate_vessel.txt")
+    vessel_path = os.path.join(run_dir, f"generate_vessel{SUFFIX_D10_PLUS}.txt")
+    if not os.path.exists(vessel_path):
+        vessel_path = os.path.join(run_dir, "generate_vessel.txt")  # 向后兼容
 
     if not os.path.exists(stats_path):
         return None
@@ -66,7 +68,7 @@ def parse_run_statistics(run_dir: str, suffix: str = SUFFIX_D10_PLUS) -> Optiona
     if len(metrics) < 4:
         return None  # 文件不完整
 
-    # 数段数（generate_vessel.txt 每行一段）
+    # 数段数（generate_vessel_d10+um.txt 每行一段）
     segment_count = 0
     if os.path.exists(vessel_path):
         try:

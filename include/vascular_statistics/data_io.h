@@ -10,10 +10,10 @@ namespace vessel_stats {
 ///   edges_file.txt    — 以空白分隔的整数对（节点编号）
 ///   vertices_file.txt — 每节点 6 个值：[idx, type, x, y, z, radius]
 /// 输出文件（生成于当前工作目录）：
-///   generate_vessel.txt             — 各段节点序列
-///   generate_vessel_radius.txt      — 各段平均半径
-///   generate_vessel_path_length.txt — 各段路径长度
-///   generate_vessel_tortuosity.txt  — 各段弯曲度
+///   generate_vessel_d10+um.txt             — 各段节点序列（>=10um 子范围）
+///   generate_vessel_radius_d10+um.txt      — 各段平均半径
+///   generate_vessel_path_length_d10+um.txt — 各段路径长度
+///   generate_vessel_tortuosity_d10+um.txt  — 各段弯曲度
 ///   statistics_summary_d10+um.txt    — 汇总统计（直径 >= 10 um 有效段）
 /// spacing（sx,sy,sz, μm/体素）：三者均 > 0 时启用各向异性物理单位
 /// （距离逐轴加权得 μm；半径→μm 标量 = (sx+sy)/2 XY 均值）。

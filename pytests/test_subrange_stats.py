@@ -43,11 +43,11 @@ def test_end_to_end():
                 ("tortuosity", torts),
             ]:
                 with open(
-                    os.path.join(run_dir, f"generate_vessel_{key}.txt"), "w"
+                    os.path.join(run_dir, f"generate_vessel_{key}_d10+um.txt"), "w"
                 ) as f:
                     for v in data:
                         f.write(f"{v}\n")
-            with open(os.path.join(run_dir, "generate_vessel.txt"), "w") as f:
+            with open(os.path.join(run_dir, "generate_vessel_d10+um.txt"), "w") as f:
                 for seq in nodes:
                     f.write(f"{seq}\n")
 

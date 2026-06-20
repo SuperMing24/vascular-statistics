@@ -3,8 +3,8 @@
 
 背景：
   C++ 引擎输出的 statistics_summary_d10+um.txt 仅统计直径 >= 10 um 的有效段，
-  但 generate_vessel_radius.txt / generate_vessel_path_length.txt /
-  generate_vessel_tortuosity.txt 中保留了全部血管段的明细数据。
+  但 generate_vessel_radius_d10+um.txt / generate_vessel_path_length_d10+um.txt /
+  generate_vessel_tortuosity_d10+um.txt 中保留了全部血管段的明细数据。
   本模块从这些明细文件中按直径范围过滤（默认 0-10 um），
   生成独立的子范围统计文件，不覆盖原有输出。
 
@@ -68,11 +68,19 @@ def _mad_outlier_count(values: List[float], k: float = MAD_K) -> int:
 # ============================================================================
 
 def parse_segment_data(run_dir: str) -> Optional[Dict[str, Any]]:
-    """读取单个 run_* 目录中的全部血管段明细数据。"""
-    radius_path = os.path.join(run_dir, "generate_vessel_radius.txt")
-    length_path = os.path.join(run_dir, "generate_vessel_path_length.txt")
-    tort_path = os.path.join(run_dir, "generate_vessel_tortuosity.txt")
-    vessel_path = os.path.join(run_dir, "generate_vessel.txt")
+    """读取单个 run_* 目录中的全部血管段明细数据。
+    优先新名 (_d10+um)，回退旧名（向后兼容）。
+    """
+    def _resolve(name: str) -> str:
+        new_path = os.path.join(run_dir, f"{name}{SUFFIX_D10_PLUS}.txt")
+        if os.path.exists(new_path):
+            return new_path
+        return os.path.join(run_dir, f"{name}.txt")
+
+    radius_path = _resolve("generate_vessel_radius")
+    length_path = _resolve("generate_vessel_path_length")
+    tort_path = _resolve("generate_vessel_tortuosity")
+    vessel_path = _resolve("generate_vessel")
 
     if not os.path.exists(radius_path):
         return None
