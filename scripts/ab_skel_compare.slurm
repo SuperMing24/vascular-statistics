@@ -13,8 +13,10 @@
 #   方案 B (task 1): 降采样 512->363 + sampling 1.0 + speed 0.2, spacing 1.932
 #
 set -euo pipefail
+set +u                 # bashrc 含未定义变量，临时关闭 nounset
 source ~/.bashrc
 conda activate vascstats
+set -u
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
@@ -23,6 +25,7 @@ SEG=/share/home/sukm/experiments/vs_2pfm_skelgt/csam_seg/W2R_20190903_ws1_csam_s
 OUT_BASE=/share/home/sukm/experiments/vs_2pfm_skelgt/ab_compare
 VOL=0.40936   # W2R_ws1 整图组织体积（与金标准同图）
 EXE=/share/home/sukm/vascular-statistics/build/vessel_stats
+Z_KEEP=299    # T2: CSAM Z 截断到金标准范围（原 406，金标准骨架 Z 仅到 298.98）
 
 if [ "$SLURM_ARRAY_TASK_ID" = "0" ]; then
     METHOD="A_native512_s2.0"
@@ -54,6 +57,12 @@ arr = tifffile.imread('$SEG')
 if arr.ndim == 3:
     arr = np.transpose(arr, (1, 2, 0))   # [D,H,W] -> [H,W,D]
 stack = (arr > 0).astype(int)
+
+# T2: Z 轴截断到金标准范围（对齐金标准 + 减计算量）
+z_keep = $Z_KEEP
+if z_keep > 0 and stack.shape[2] > z_keep:
+    print(f'  Z 截断: {stack.shape[2]} -> {z_keep}', flush=True)
+    stack = stack[:, :, :z_keep]
 
 downsample = $DOWNSAMPLE
 if downsample > 0:
