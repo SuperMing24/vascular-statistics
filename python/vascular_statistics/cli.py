@@ -645,7 +645,7 @@ def aggregate_stats_cmd(output_root, sample_key):
 # 子范围统计命令（默认 0-10 um）。旧名 micro-* 保留为别名。
 # ═══════════════════════════════════════════════════════════════════════
 
-from vascular_statistics.microvascular_stats import DIAMETER_SUFFIX
+from vascular_statistics.subrange_stats import DIAMETER_SUFFIX
 
 @main.command("diameter-stats")
 @click.option("--output-root", type=click.Path(exists=True), required=True,
@@ -665,7 +665,7 @@ def diameter_stats_cmd(output_root, sample_key):
       vascular-stats diameter-stats --output-root /share/home/sukm/experiments/vascstats
       vascular-stats diameter-stats --output-root ... --sample-key "BCAS_1st/..."
     """
-    from vascular_statistics.microvascular_stats import run_subrange_stats
+    from vascular_statistics.subrange_stats import run_subrange_stats
 
     sample_keys = [sample_key] if sample_key else None
     result = run_subrange_stats(output_root, sample_keys=sample_keys)
@@ -736,7 +736,7 @@ def diameter_summary_cmd(output_root, sample_key):
     示例：
       vascular-stats diameter-summary --output-root /share/home/sukm/experiments/vascstats
     """
-    from vascular_statistics.microvascular_stats import generate_cross_sample_summary
+    from vascular_statistics.subrange_stats import generate_cross_sample_summary
 
     sample_keys = [sample_key] if sample_key else None
     result = generate_cross_sample_summary(output_root, sample_keys=sample_keys)

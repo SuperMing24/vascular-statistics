@@ -7,7 +7,7 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
 
-from vascular_statistics.microvascular_stats import (
+from vascular_statistics.subrange_stats import (
     write_subrange_stats,
     generate_cross_sample_summary,
 )
