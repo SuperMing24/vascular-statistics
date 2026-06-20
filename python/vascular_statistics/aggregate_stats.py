@@ -101,7 +101,7 @@ def parse_run_statistics(run_dir: str, suffix: str = SUFFIX_D10_PLUS) -> Optiona
 
 def aggregate_sample_stats(
     sample_dir: str,
-    suffix: str = "",
+    suffix: str = SUFFIX_D10_PLUS,
 ) -> Optional[Dict[str, Any]]:
     """跨所有 run_* 目录聚合统计数据。
 
@@ -374,7 +374,7 @@ def format_aggregate_stats(agg: Dict[str, Any], suffix: str = "") -> str:
 
 def write_aggregate_stats(
     sample_dir: str,
-    suffix: str = "",
+    suffix: str = SUFFIX_D10_PLUS,
 ) -> Optional[str]:
     """汇总样本统计并写入 statistics_summary{suffix}.txt。
 
@@ -403,7 +403,7 @@ def write_aggregate_stats(
 def run_aggregation(
     output_root: str,
     sample_keys: Optional[List[str]] = None,
-    suffix: str = "",
+    suffix: str = SUFFIX_D10_PLUS,
 ) -> dict:
     """对所有样本（或指定样本）运行统计聚合。
 
