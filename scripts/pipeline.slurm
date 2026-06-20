@@ -132,6 +132,7 @@ OUTPUT_STEM="${3:-skeleton}"
 SAMPLING="${4:-1.0}"
 PHASES="${5:-all}"
 ANISOTROPIC="${6:-}"  # 传 "--anisotropic" 启用
+SPEED="${7:-0.05}"    # 收缩速度 speed_param（默认 0.05，大样本可 0.2 加速）
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
@@ -364,6 +365,7 @@ fi
 if [ "$ANISOTROPIC" = "--anisotropic" ]; then
     PIPE_CMD+=(--anisotropic)
 fi
+PIPE_CMD+=(--speed "$SPEED")
 
 echo "Command: ${PIPE_CMD[*]}"
 echo ""

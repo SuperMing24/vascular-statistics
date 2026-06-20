@@ -193,6 +193,9 @@ def skeletonize(input, output, sampling, speed, dist, med):
 @click.option("--volume", "-v", type=float, default=None, help="组织体积 (mm^3)。不提供则从样本元数据自动查找。")
 @click.option("--output-stem", "-o", default=None, help="输出文件前缀")
 @click.option("--sampling", "-s", type=float, default=1.0, help="稀疏采样率 (1.0=最密, 2.0=快速)")
+@click.option("--speed", type=float, default=0.05,
+              help="收缩速度 speed_param（Laplacian 位置吸引权重）。值越大收敛越快、迭代越少；"
+                   "默认 0.05（保守，与历史一致）；大样本可用 0.2 加速。")
 @click.option(
     "--phases", default="all",
     type=click.Choice(["all", "skeletonize", "stats"]),
@@ -201,7 +204,7 @@ def skeletonize(input, output, sampling, speed, dist, med):
     "--anisotropic", is_flag=True, default=False,
     help="启用各向异性 spacing 物理单位口径。从 sample_metadata.json 读取 voxel_spacing_um。"
          "未设置则走 legacy 各向同性(×2/×4)，保持与历史输出一致。")
-def pipeline(input, volume, output_stem, phases, sampling, anisotropic):
+def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic):
     """完整管线：骨架化 → 格式转换 → 统计。
 
     用 --phases 可分阶段执行：
@@ -238,7 +241,7 @@ def pipeline(input, volume, output_stem, phases, sampling, anisotropic):
         click.echo(f"已加载分割: {stack.shape}, 前景体素数: {voxel_count}")
 
         sk = Skeleton(label=stack, sampling=sampling,
-                      speed_param=0.05, dist_param=0.5, med_param=0.5)
+                      speed_param=speed, dist_param=0.5, med_param=0.5)
         sk.Update()
         graph = Tools.CalcTools.fixG(sk.GetOutput())
 

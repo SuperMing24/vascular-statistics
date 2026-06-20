@@ -27,6 +27,7 @@ def run(
     output_root: str = "",
     data_root: str = "",
     anisotropic: bool = False,
+    speed: float = 0.05,
 ) -> None:
     """完整管线：.mat/.tif 分割 → Pajek 骨架图 → C++ 统计。
 
@@ -99,7 +100,7 @@ def run(
         print(f"  体素尺寸: {stack.shape}, 前景: {voxel_count}")
 
         sk = Skeleton(label=stack, sampling=sampling,
-                      speed_param=0.05, dist_param=0.5, med_param=0.5)
+                      speed_param=speed, dist_param=0.5, med_param=0.5)
         sk.Update()
         graph = fixG(sk.GetOutput())
 
@@ -235,6 +236,8 @@ if __name__ == "__main__":
     parser.add_argument("--data-root", "-d", default="", help="数据根目录（面向样本模式下用于计算 sample_key）")
     parser.add_argument("--anisotropic", action="store_true", default=False,
                         help="启用各向异性 spacing 物理单位口径（从 sample_metadata.json 读取 voxel_spacing_um）")
+    parser.add_argument("--speed", type=float, default=0.05,
+                        help="收缩速度 speed_param（默认 0.05；大样本可用 0.2 加速）")
 
     args = parser.parse_args()
 
@@ -247,4 +250,5 @@ if __name__ == "__main__":
         output_root=args.output_root,
         data_root=args.data_root,
         anisotropic=args.anisotropic,
+        speed=args.speed,
     )
