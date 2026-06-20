@@ -1,24 +1,27 @@
 """
-微血管统计模块 —— 从已有骨架化运行结果中提取直径 < 10 μm 的微血管段统计。
+子范围统计模块 —— 从已有骨架化运行结果中按直径范围提取血管段统计。
 
 背景：
-  C++ 引擎输出的 statistics_summary.txt 仅统计直径 ≥ 10 μm 的"有效段"，
+  C++ 引擎输出的 statistics_summary.txt 仅统计直径 >= 10 um 的"有效段"，
   但 generate_vessel_radius.txt / generate_vessel_path_length.txt /
   generate_vessel_tortuosity.txt 中保留了全部血管段的明细数据。
-  本模块从这些明细文件中过滤出直径 < 10 μm（半径 < 2.5 μm）的微血管段，
-  生成独立的微血管统计文件，不覆盖原有输出。
+  本模块从这些明细文件中按直径范围过滤（默认 0-10 um），
+  生成独立的子范围统计文件，不覆盖原有输出。
 
-阈值依据：
-  C++ data_io.cpp 中 if (avg_temp >= 2.5) 对应直径 ≥ 10 μm
+输出后缀: _d0-10um（直径 0-10 um）。旧名 _micro 已弃用。
+
+阈值依据（legacy 口径）：
+  C++ data_io.cpp 中 if (avg_temp >= 2.5) 对应直径 >= 10 um
   （avg_temp 为段平均半径，输出时直径 = avg_temp * 4）。
-  因此微血管过滤条件为 avg_radius < 2.5。
+  因此 0-10 um 过滤条件为 avg_radius < 2.5。
+  （轨道 B 各向异性口径下阈值由 r_scale 动态计算）
 
 输出（per-run）：
-  statistics_summary_micro.txt       — 微血管汇总统计
-  generate_vessel_micro.txt          — 微血管段节点序列
-  generate_vessel_radius_micro.txt   — 微血管段平均半径
-  generate_vessel_path_length_micro.txt — 微血管段路径长度
-  generate_vessel_tortuosity_micro.txt  — 微血管段弯曲度
+  statistics_summary_d0-10um.txt       — 子范围汇总统计
+  generate_vessel_d0-10um.txt          — 子范围段节点序列
+  generate_vessel_radius_d0-10um.txt   — 子范围段平均半径
+  generate_vessel_path_length_d0-10um.txt — 子范围段路径长度
+  generate_vessel_tortuosity_d0-10um.txt  — 子范围段弯曲度
 """
 
 import json
@@ -28,27 +31,26 @@ import statistics
 from typing import Any, Dict, List, Optional, Tuple
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# 阈值常量
-# ═══════════════════════════════════════════════════════════════════════
+# ============================================================================
+# 子范围常量（默认 0-10 um）
+# ============================================================================
 
-# C++ 引擎中 avg_temp >= 2.5 判定为"有效段"（直径 >= 10 μm）。
-# 微血管取反：半径 < 2.5 μm。
-MICRO_RADIUS_THRESHOLD = 2.5
-MICRO_MIN_NODES = 3  # 与 C++ 一致：k > 2 即至少 3 个节点
+# 文件后缀与输出标签
+DIAMETER_SUFFIX = "_d0-10um"        # 子范围统计文件后缀
+DIAMETER_LABEL = "直径 0-10 um"     # 用于汇总/跨样本报告标题
+DIAMETER_LO_UM = 0.0                # 直径下界 (um)
+DIAMETER_HI_UM = 10.0               # 直径上界 (um)
+
+# Legacy 口径常量（轨道 B 各向异性下由 _read_caliber 动态覆盖）
+LEGACY_RADIUS_THRESHOLD = 2.5       # 半径 < 2.5 体素 (= 直径 < 10um，旧 x4)
+LEGACY_MIN_NODES = 3                # 与 C++ 一致：k > 2 即至少 3 个节点
 
 # 离群段标记（与 C++ data_io.cpp 一致，轨道 A）。
-# micro 段同样可能含人工/自动产生的超长过渡连接，须一并防范。
 MAD_K = 3.5  # Iglewicz-Hoaglin 修正 z 分数阈值（相对判据，单位无关）
-ABS_LENGTH_THRESHOLD_VOXEL = 600.0  # 绝对兜底（≈1200μm 当前口径，待轨道B校准）
-
-# C++ 明细文件中的 path_length 为体素距离；汇总输出 μm 时 ×2（与 C++ 宏观口径一致）。
-LENGTH_VOXEL_TO_UM = 2.0
 
 
 def _mad_outlier_count(values: List[float], k: float = MAD_K) -> int:
     """MAD（中位数绝对偏差）离群计数：|0.6745*(x-median)/MAD| > k。
-
     单位无关；MAD 退化为 0（半数以上同值）或样本不足 2 时不标记任何离群。
     """
     if len(values) < 2:
@@ -60,25 +62,12 @@ def _mad_outlier_count(values: List[float], k: float = MAD_K) -> int:
     return sum(1 for x in values if abs(0.6745 * (x - med) / mad) > k)
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# ============================================================================
 # 解析 per-run 段明细文件
-# ═══════════════════════════════════════════════════════════════════════
+# ============================================================================
 
 def parse_segment_data(run_dir: str) -> Optional[Dict[str, Any]]:
-    """读取单个 run_* 目录中的全部血管段明细数据。
-
-    参数：
-        run_dir: run_YYYYMMDD_HHMMSS 目录路径。
-
-    返回：
-        dict 含 4 个列表（一一对应，按行号对齐），若关键文件缺失则返回 None。
-        {
-            "radii": [float, ...],        # 每段平均半径 (μm)
-            "path_lengths": [float, ...], # 每段路径长度 (μm)
-            "tortuosities": [float, ...], # 每段弯曲度 (a.u.)
-            "node_sequences": [str, ...], # 每段节点序列（原始行文本）
-        }
-    """
+    """读取单个 run_* 目录中的全部血管段明细数据。"""
     radius_path = os.path.join(run_dir, "generate_vessel_radius.txt")
     length_path = os.path.join(run_dir, "generate_vessel_path_length.txt")
     tort_path = os.path.join(run_dir, "generate_vessel_tortuosity.txt")
@@ -97,7 +86,6 @@ def parse_segment_data(run_dir: str) -> Optional[Dict[str, Any]]:
     if n_segments == 0:
         return None
 
-    # 辅助：读取单列浮点文件
     def _read_floats(path: str, expected: int) -> List[float]:
         if not os.path.exists(path):
             return [0.0] * expected
@@ -106,7 +94,6 @@ def parse_segment_data(run_dir: str) -> Optional[Dict[str, Any]]:
                 values = [float(line.strip()) for line in f if line.strip()]
         except (OSError, ValueError):
             return [0.0] * expected
-        # 补齐或截断到 expected 长度
         if len(values) < expected:
             values.extend([0.0] * (expected - len(values)))
         return values[:expected]
@@ -114,7 +101,6 @@ def parse_segment_data(run_dir: str) -> Optional[Dict[str, Any]]:
     path_lengths = _read_floats(length_path, n_segments)
     tortuosities = _read_floats(tort_path, n_segments)
 
-    # 读取节点序列（保留原始文本行）
     node_sequences: List[str] = []
     if os.path.exists(vessel_path):
         try:
@@ -124,7 +110,6 @@ def parse_segment_data(run_dir: str) -> Optional[Dict[str, Any]]:
                 ]
         except OSError:
             pass
-    # 补齐
     if len(node_sequences) < n_segments:
         node_sequences.extend([""] * (n_segments - len(node_sequences)))
     node_sequences = node_sequences[:n_segments]
@@ -137,15 +122,14 @@ def parse_segment_data(run_dir: str) -> Optional[Dict[str, Any]]:
     }
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# 微血管段过滤与统计计算
-# ═══════════════════════════════════════════════════════════════════════
+# ============================================================================
+# 口径检测
+# ============================================================================
 
 def _read_caliber(run_dir: str) -> Tuple[str, float, float, float, float]:
-    """从 run_meta.json 读取口径标记，返回 (mode, r_scale, length_um_factor,
-    micro_radius_threshold, abs_length_threshold)。
-
-    无 run_meta.json 或未标记 → legacy 默认。
+    """从 run_meta.json 读取口径标记。
+    返回 (mode, r_scale, length_um_factor, radius_threshold, abs_length_threshold)。
+    无 run_meta.json 或未标记 -> legacy 默认。
     """
     meta_path = os.path.join(run_dir, "run_meta.json")
     mode = "legacy"
@@ -163,24 +147,28 @@ def _read_caliber(run_dir: str) -> Tuple[str, float, float, float, float]:
     if mode == "anisotropic":
         return mode, r_scale, 1.0, 5.0 / r_scale, 1200.0
     else:
-        return mode, 2.0, 2.0, 2.5, 600.0
+        return mode, 2.0, 2.0, LEGACY_RADIUS_THRESHOLD, 600.0
 
 
-def compute_micro_stats(
+# ============================================================================
+# 子范围统计计算（默认 0-10 um）
+# ============================================================================
+
+def compute_subrange_stats(
     run_dir: str,
     volume: float,
 ) -> Optional[Dict[str, Any]]:
-    """从 per-run 段数据中计算微血管（直径 < 10 μm）统计。
+    """从 per-run 段数据中计算子范围（默认 0-10 um）统计。
 
     参数：
         run_dir: run_* 目录路径。
         volume: 组织体积 mm^3。
 
     返回：
-        dict 含微血管的 4 项指标 + 段数 + 过滤后的段明细，
-        若无段数据或微血管段数为 0 则返回 None。
+        dict 含子范围指标 + 段数 + 过滤后的段明细，
+        若无段数据或符合条件的段数为 0 则返回 None。
     """
-    mode, r_scale, length_um, micro_thresh, abs_thresh = _read_caliber(run_dir)
+    mode, r_scale, length_um, radius_thresh, abs_thresh = _read_caliber(run_dir)
 
     seg_data = parse_segment_data(run_dir)
     if seg_data is None:
@@ -192,78 +180,68 @@ def compute_micro_stats(
     node_sequences = seg_data["node_sequences"]
 
     # 过滤：半径 < 阈值 且节点数 >= 3
-    #   legacy:    半径 < 2.5 体素 (= 直径 < 10μm，旧 ×4 换算)
-    #   anisotropic: 半径 < 5/r_scale 体素 (= 直径 < 10μm，锁住生理 10μm)
-    micro_indices: List[int] = []
+    sub_indices: List[int] = []
     for i, r in enumerate(radii):
         n_nodes = len(node_sequences[i].split()) if node_sequences[i] else 0
-        if r < micro_thresh and n_nodes >= MICRO_MIN_NODES:
-            micro_indices.append(i)
+        if r < radius_thresh and n_nodes >= LEGACY_MIN_NODES:
+            sub_indices.append(i)
 
-    if not micro_indices:
+    if not sub_indices:
         return None
 
-    # 提取微血管段数据
-    micro_radii = [radii[i] for i in micro_indices]
-    micro_lengths = [path_lengths[i] for i in micro_indices]
-    micro_torts = [tortuosities[i] for i in micro_indices]
-    micro_nodes = [node_sequences[i] for i in micro_indices]
-
-    n_micro_all = len(micro_radii)
+    sub_radii = [radii[i] for i in sub_indices]
+    sub_lengths = [path_lengths[i] for i in sub_indices]
+    sub_torts = [tortuosities[i] for i in sub_indices]
+    n_all = len(sub_radii)
 
     # --- P99 百分位排除（实际剔除，与 C++ 一致）---
     p99_threshold = 0.0
     n_excluded = 0
-    if n_micro_all > 0:
-        sorted_lengths = sorted(micro_lengths)
-        idx99 = int(99.0 / 100.0 * len(sorted_lengths))
-        p99_threshold = sorted_lengths[idx99] if idx99 < len(sorted_lengths) else sorted_lengths[-1]
-        n_excluded = len(sorted_lengths) - idx99
+    if n_all > 0:
+        sorted_lens = sorted(sub_lengths)
+        idx99 = int(99.0 / 100.0 * len(sorted_lens))
+        p99_threshold = sorted_lens[idx99] if idx99 < len(sorted_lens) else sorted_lens[-1]
+        n_excluded = len(sorted_lens) - idx99
 
     # 排除后子集
-    filt_indices = [i for i, L in enumerate(micro_lengths) if L <= p99_threshold]
-    micro_radii_f = [micro_radii[i] for i in filt_indices]
-    micro_lengths_f = [micro_lengths[i] for i in filt_indices]
-    micro_torts_f = [micro_torts[i] for i in filt_indices]
-    n_micro = len(micro_radii_f)
+    keep = [i for i, L in enumerate(sub_lengths) if L <= p99_threshold]
+    radii_f = [sub_radii[i] for i in keep]
+    lengths_f = [sub_lengths[i] for i in keep]
+    torts_f = [sub_torts[i] for i in keep]
+    n_eff = len(radii_f)
 
     # 排除前均值（参考）
-    avg_length_all = sum(micro_lengths) / n_micro_all * length_um if n_micro_all > 0 else 0.0
+    avg_len_all = sum(sub_lengths) / n_all * length_um if n_all > 0 else 0.0
 
-    # 直径 = 半径 × 2 × r_scale（legacy r_scale=2.0 → ×4，口径不变）
-    avg_radius = sum(micro_radii_f) / n_micro if n_micro > 0 else 0.0
+    # 直径 = 半径 x 2 x r_scale
+    avg_radius = sum(radii_f) / n_eff if n_eff > 0 else 0.0
     avg_diameter = avg_radius * 2.0 * r_scale
-    median_diameter = statistics.median(micro_radii_f) * 2.0 * r_scale if n_micro > 0 else 0.0
+    median_diameter = statistics.median(radii_f) * 2.0 * r_scale if n_eff > 0 else 0.0
 
-    # 长度 = 体素距离 × length_um（legacy ×2，anisotropic ×1 因明细已为 μm）
-    avg_length = sum(micro_lengths_f) / n_micro * length_um if n_micro > 0 else 0.0
-    median_length = statistics.median(micro_lengths_f) * length_um if n_micro > 0 else 0.0
+    # 长度
+    avg_length = sum(lengths_f) / n_eff * length_um if n_eff > 0 else 0.0
+    median_length = statistics.median(lengths_f) * length_um if n_eff > 0 else 0.0
 
-    # 弯曲度（排除后子集中过滤 inf/NaN）
-    valid_torts = [t for t in micro_torts_f if not (math.isnan(t) or math.isinf(t))]
+    # 弯曲度
+    valid_torts = [t for t in torts_f if not (math.isnan(t) or math.isinf(t))]
     n_valid_torts = len(valid_torts)
-    if n_valid_torts > 0:
-        avg_tortuosity = sum(valid_torts) / n_valid_torts
-        median_tortuosity = statistics.median(valid_torts)
-    else:
-        avg_tortuosity = float("nan")
-        median_tortuosity = float("nan")
-    n_invalid_torts = n_micro - n_valid_torts
+    avg_tortuosity = sum(valid_torts) / n_valid_torts if n_valid_torts > 0 else float("nan")
+    median_tortuosity = statistics.median(valid_torts) if n_valid_torts > 0 else float("nan")
+    n_invalid_torts = n_eff - n_valid_torts
 
-    # 段密度 = 微血管段数（排除后） / 组织体积
-    segment_density = n_micro / volume if volume > 0 else float("nan")
+    segment_density = n_eff / volume if volume > 0 else float("nan")
 
-    # 离群诊断（信息项，基于原始微血管段长度计算）。
-    mad_outliers = _mad_outlier_count(micro_lengths, MAD_K)
-    abs_outliers = sum(1 for x in micro_lengths if x > abs_thresh)
-    mad_ratio = 100.0 * mad_outliers / n_micro_all if n_micro_all > 0 else 0.0
-    abs_ratio = 100.0 * abs_outliers / n_micro_all if n_micro_all > 0 else 0.0
-    excluded_ratio = 100.0 * n_excluded / n_micro_all if n_micro_all > 0 else 0.0
+    # 离群诊断（信息项，基于原始子范围段长度）
+    mad_outliers = _mad_outlier_count(sub_lengths, MAD_K)
+    abs_outliers = sum(1 for x in sub_lengths if x > abs_thresh)
+    mad_ratio = 100.0 * mad_outliers / n_all if n_all > 0 else 0.0
+    abs_ratio = 100.0 * abs_outliers / n_all if n_all > 0 else 0.0
+    excluded_ratio = 100.0 * n_excluded / n_all if n_all > 0 else 0.0
 
     return {
         "n_segments_total": len(radii),
-        "n_segments_micro": n_micro,
-        "n_segments_micro_all": n_micro_all,
+        "n_segments_subrange": n_eff,
+        "n_segments_subrange_all": n_all,
         "avg_diameter_um": avg_diameter,
         "median_diameter_um": median_diameter,
         "avg_length_um": avg_length,
@@ -279,100 +257,91 @@ def compute_micro_stats(
         "abs_ratio": abs_ratio,
         "stats_unit_mode": mode,
         "r_scale": r_scale,
-        # P99 排除
         "p99_threshold": p99_threshold,
         "n_excluded": n_excluded,
         "excluded_ratio": excluded_ratio,
-        "avg_length_before_exclusion": avg_length_all,
-        # 过滤后的明细（供写入）
-        "micro_radii": micro_radii,
-        "micro_lengths": micro_lengths,
-        "micro_tortuosities": micro_torts,
-        "micro_node_sequences": micro_nodes,
+        "avg_length_before_exclusion": avg_len_all,
+        # 明细（供写入）
+        "sub_radii": sub_radii,
+        "sub_lengths": sub_lengths,
+        "sub_torts": sub_torts,
+        "node_sequences_sub": [node_sequences[i] for i in sub_indices],
     }
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# 写入 per-run 微血管统计文件
-# ═══════════════════════════════════════════════════════════════════════
+# ============================================================================
+# 写入 per-run 子范围统计文件
+# ============================================================================
 
-def write_micro_stats(
+def write_subrange_stats(
     run_dir: str,
     volume: float,
 ) -> Optional[str]:
-    """计算并写入 per-run 微血管统计文件。
+    """计算并写入 per-run 子范围统计文件。
 
-    在 run_dir 中生成 5 个 _micro 后缀的文件，不覆盖原有文件。
+    在 run_dir 中生成 5 个 _d0-10um 后缀的文件，不覆盖原有文件。
 
-    参数：
-        run_dir: run_* 目录路径。
-        volume: 组织体积 mm^3。
-
-    返回：
-        写入的 statistics_summary_micro.txt 路径，若无微血管段则返回 None。
+    返回：写入的 statistics_summary_d0-10um.txt 路径，无符合条件的段则返回 None。
     """
-    stats = compute_micro_stats(run_dir, volume)
+    stats = compute_subrange_stats(run_dir, volume)
     if stats is None:
         return None
 
-    # --- 写入过滤后的段明细文件 ---
-    def _write_lines(suffix: str, data: List[Any]) -> str:
-        path = os.path.join(run_dir, f"generate_vessel_{suffix}_micro.txt")
+    # --- 写入过滤后的段明细 ---
+    def _write_lines(key: str, data: List[Any]) -> str:
+        path = os.path.join(run_dir, f"generate_vessel_{key}{DIAMETER_SUFFIX}.txt")
         with open(path, "w", encoding="utf-8") as f:
             for item in data:
                 f.write(f"{item}\n")
         return path
 
-    _write_lines("radius", stats["micro_radii"])
-    _write_lines("path_length", stats["micro_lengths"])
-    _write_lines("tortuosity", stats["micro_tortuosities"])
+    _write_lines("radius", stats["sub_radii"])
+    _write_lines("path_length", stats["sub_lengths"])
+    _write_lines("tortuosity", stats["sub_torts"])
 
-    # 节点序列（每行已是空格分隔的节点编号字符串）
-    node_path = os.path.join(run_dir, "generate_vessel_micro.txt")
+    node_path = os.path.join(run_dir, f"generate_vessel{DIAMETER_SUFFIX}.txt")
     with open(node_path, "w", encoding="utf-8") as f:
-        for seq in stats["micro_node_sequences"]:
+        for seq in stats["node_sequences_sub"]:
             f.write(f"{seq}\n")
 
-    # --- 写入微血管统计汇总 ---
-    summary_path = os.path.join(run_dir, "statistics_summary_micro.txt")
-    n_micro = stats["n_segments_micro"]
+    # --- 写入统计汇总 ---
+    summary_path = os.path.join(run_dir, f"statistics_summary{DIAMETER_SUFFIX}.txt")
+    n_sub = stats["n_segments_subrange"]
     n_total = stats["n_segments_total"]
 
     n_invalid = stats.get("n_invalid_tortuosity", 0)
     invalid_note = ""
     if n_invalid > 0:
         invalid_note = (
-            f"\n注：{n_invalid} 个微血管段的弯曲度为 inf/NaN（旧 C++ 运行中 "
+            f"\n注：{n_invalid} 个子范围段的弯曲度为 inf/NaN（旧 C++ 运行中 "
             f"path_direct_distance=0 所致），已从弯曲度均值计算中排除。"
         )
 
-    # ⚠️ 由绝对阈值比例驱动（见 data_io.cpp 同处说明）：MAD 在天然右偏的段长
-    # 分布上会误标长尾，仅作信息报告；过度连接由绝对超长段比例触发告警。
     warn_note = ""
     if stats["abs_ratio"] > 1.0:
-        warn_note = "⚠️ 注意：骨架可能存在过度连接（绝对超长段比例偏高）"
+        warn_note = "!! 注意：骨架可能存在过度连接（绝对超长段比例偏高）"
 
     mode = stats.get("stats_unit_mode", "legacy")
     unit_note = ("（各向异性 spacing 物理单位）" if mode == "anisotropic"
-                 else "（legacy 各向同性 2μm/体素）")
-    abs_unit = "μm" if mode == "anisotropic" else "体素"
+                 else "（legacy 各向同性 2um/体素）")
+    abs_unit = "um" if mode == "anisotropic" else "体素"
     abs_thresh = 1200.0 if mode == "anisotropic" else 600.0
 
     lines = [
-        "Vascular_Statistics — 单次运行微血管统计（直径 < 10 μm）",
+        f"Vascular_Statistics -- 单次运行子范围统计（{DIAMETER_LABEL}）",
         "",
-        f"平均直径 (μm): {stats['avg_diameter_um']:.6f}",
-        f"中位直径 (μm): {stats['median_diameter_um']:.6f}",
-        f"平均长度 (μm): {stats['avg_length_um']:.6f}",
-        f"中位长度 (μm): {stats['median_length_um']:.6f}",
-        f"段密度 (seg/mm³): {stats['segment_density_per_mm3']:.6f}",
+        f"平均直径 (um): {stats['avg_diameter_um']:.6f}",
+        f"中位直径 (um): {stats['median_diameter_um']:.6f}",
+        f"平均长度 (um): {stats['avg_length_um']:.6f}",
+        f"中位长度 (um): {stats['median_length_um']:.6f}",
+        f"段密度 (seg/mm^3): {stats['segment_density_per_mm3']:.6f}",
         f"平均弯曲度: {stats['avg_tortuosity_au']:.6f}",
         f"中位弯曲度: {stats['median_tortuosity_au']:.6f}",
-        f"有效段数: {stats['n_segments_micro']}",
+        f"有效段数: {n_sub}",
         "",
         f"--- 百分位排除（P99 = {stats['p99_threshold']:.2f} {abs_unit}）---",
         f"排除段数: {stats['n_excluded']} ({stats['excluded_ratio']:.4f}%)",
-        f"排除前有效段数: {stats['n_segments_micro_all']}",
+        f"排除前有效段数: {stats['n_segments_subrange_all']}",
         f"排除前平均长度: {stats['avg_length_before_exclusion']:.4f} {abs_unit}",
         "",
         f"--- 离群诊断（信息项，已由 P99 排除处理）---",
@@ -381,12 +350,12 @@ def write_micro_stats(
         f"{stats['abs_outliers']} ({stats['abs_ratio']:.4f}%)",
         warn_note,
         "",
-        f"注：统计值基于 P99 排除后的 {stats['n_segments_micro']} 个微血管段；"
-        f"微血管定义：直径 < 10 μm 且节点数 >= 3；"
+        f"注：统计值基于 P99 排除后的 {n_sub} 个子范围段（{DIAMETER_LABEL}，"
+        f"节点数 >= 3）；"
         f"P99 排除顶 1% 极端长尾，排除的段写入明细文件但不参与统计；"
         f"单位口径 {unit_note}。",
-        f"总段数: {n_total}，微血管段数（排除前）: {stats['n_segments_micro_all']}",
-        f"组织体积: {stats['volume_mm3']} mm³",
+        f"总段数: {n_total}，子范围段数（排除前）: {stats['n_segments_subrange_all']}",
+        f"组织体积: {stats['volume_mm3']} mm^3",
         invalid_note,
     ]
 
@@ -396,50 +365,39 @@ def write_micro_stats(
     return summary_path
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# ============================================================================
 # 批量编排
-# ═══════════════════════════════════════════════════════════════════════
+# ============================================================================
 
-def run_micro_stats(
+def run_subrange_stats(
     output_root: str,
     sample_keys: Optional[List[str]] = None,
 ) -> dict:
-    """对所有已完成骨架化的样本（或指定样本）的所有 run 生成微血管统计。
+    """对所有已完成骨架化的样本生成子范围统计。
 
-    遍历每个样本目录下的 run_* 子目录，读取已有的段明细文件，
-    计算并写入微血管统计。仅在已有 statistics_summary.txt（C++ 已运行）
-    但尚无 statistics_summary_micro.txt 的 run 上执行（幂等）。
-
-    参数：
-        output_root: 输出根目录。
-        sample_keys: 指定样本键列表。None = 扫描全部含 run_* 的样本。
-
-    返回：
-        {"processed": N, "skipped": N, "no_micro": N, "failed": N}
+    幂等：已有 statistics_summary_d0-10um.txt 的 run 将跳过。
     """
     if sample_keys is None:
         sample_keys = _scan_completed_samples(output_root)
 
     processed = 0
     skipped = 0
-    no_micro = 0
+    no_result = 0
     failed = 0
 
     for sk in sorted(sample_keys):
         sample_dir = os.path.join(output_root, sk)
         if not os.path.isdir(sample_dir):
             failed += 1
-            print(f"  [FAIL] {sk} — 目录不存在")
+            print(f"  [FAIL] {sk} -- 目录不存在")
             continue
 
-        # 获取样本 volume
         volume = _resolve_sample_volume(sample_dir)
         if volume is None:
             failed += 1
-            print(f"  [FAIL] {sk} — 无法确定组织体积")
+            print(f"  [FAIL] {sk} -- 无法确定组织体积")
             continue
 
-        # 遍历 run_* 子目录
         run_dirs = sorted([
             d for d in os.listdir(sample_dir)
             if d.startswith("run_") and os.path.isdir(os.path.join(sample_dir, d))
@@ -448,24 +406,22 @@ def run_micro_stats(
         for run_name in run_dirs:
             run_dir = os.path.join(sample_dir, run_name)
 
-            # 跳过无 C++ 统计输出的 run
             if not os.path.exists(os.path.join(run_dir, "statistics_summary.txt")):
                 continue
 
-            # 幂等：已有 micro 统计则跳过
-            micro_summary = os.path.join(run_dir, "statistics_summary_micro.txt")
-            if os.path.exists(micro_summary):
+            sub_summary = os.path.join(run_dir, f"statistics_summary{DIAMETER_SUFFIX}.txt")
+            if os.path.exists(sub_summary):
                 skipped += 1
                 continue
 
             try:
-                result = write_micro_stats(run_dir, volume)
+                result = write_subrange_stats(run_dir, volume)
                 if result:
                     processed += 1
                     print(f"  [{processed}] {sk}/{run_name}")
                 else:
-                    no_micro += 1
-                    print(f"  [NO_MICRO] {sk}/{run_name} — 无微血管段")
+                    no_result += 1
+                    print(f"  [NO_RESULT] {sk}/{run_name} -- 无符合条件的段")
             except Exception as e:
                 failed += 1
                 print(f"  [FAIL] {sk}/{run_name}: {e}")
@@ -473,17 +429,16 @@ def run_micro_stats(
     return {
         "processed": processed,
         "skipped": skipped,
-        "no_micro": no_micro,
+        "no_result": no_result,
         "failed": failed,
     }
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# ============================================================================
 # 辅助函数
-# ═══════════════════════════════════════════════════════════════════════
+# ============================================================================
 
 def _resolve_sample_volume(sample_dir: str) -> Optional[float]:
-    """从样本目录的 sample_metadata.json 读取组织体积。"""
     meta_path = os.path.join(sample_dir, "sample_metadata.json")
     if os.path.exists(meta_path):
         try:
@@ -498,11 +453,9 @@ def _resolve_sample_volume(sample_dir: str) -> Optional[float]:
 
 
 def _scan_completed_samples(output_root: str) -> List[str]:
-    """扫描 output_root 下所有含 run_* 子目录的样本，返回 sample_key 列表。"""
     sample_keys: List[str] = []
     if not os.path.isdir(output_root):
         return sample_keys
-
     for group in sorted(os.listdir(output_root)):
         group_dir = os.path.join(output_root, group)
         if not os.path.isdir(group_dir):
@@ -523,60 +476,44 @@ def _scan_completed_samples(output_root: str) -> List[str]:
                 if has_runs:
                     rel = os.path.relpath(sample_path, output_root).replace("\\", "/")
                     sample_keys.append(rel)
-
     return sample_keys
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# 跨样本微血管汇总
-# ═══════════════════════════════════════════════════════════════════════
+# ============================================================================
+# 跨样本次范围汇总
+# ============================================================================
 
 def generate_cross_sample_summary(
     output_root: str,
     sample_keys: Optional[List[str]] = None,
 ) -> Optional[str]:
-    """生成跨样本微血管统计汇总文件。
+    """生成跨样本次范围统计汇总。
 
-    扫描所有（或指定）样本目录下的 run_*/statistics_summary_micro.txt，
-    聚合每个样本的全部 run 的微血管指标，
-    写入 output_root 下的 microvascular_cross_sample_summary.txt。
-
-    参数：
-        output_root: 输出根目录。
-        sample_keys: 指定样本键列表。None = 扫描全部。
-
-    返回：
-        写入的文件路径，若无有效样本则返回 None。
+    扫描所有样本的 statistics_summary_d0-10um.txt，
+    写入 output_root 下的 cross_sample_summary_d0-10um.txt。
     """
-    # 延迟导入，避免循环依赖
     from vascular_statistics.aggregate_stats import aggregate_sample_stats
 
     if sample_keys is None:
         sample_keys = _scan_completed_samples(output_root)
 
-    # 收集每个样本的微血管聚合数据
     rows: List[Dict[str, Any]] = []
 
     for sk in sorted(sample_keys):
         sample_dir = os.path.join(output_root, sk)
-
-        # 使用 aggregate_sample_stats 获取结构化聚合结果
-        agg = aggregate_sample_stats(sample_dir, suffix="_micro")
+        agg = aggregate_sample_stats(sample_dir, suffix=DIAMETER_SUFFIX)
         if agg is None:
             continue
 
         n_runs = agg.get("n_runs", 0)
         aggregates = agg.get("aggregates", {})
 
-        # 提取 4 项指标的均值
         def _get_mean(key: str) -> Optional[float]:
             entry = aggregates.get(key)
             if entry is None:
                 return None
             mean_v = entry.get("mean")
-            if mean_v is None:
-                return None
-            if mean_v != mean_v:  # NaN
+            if mean_v is None or mean_v != mean_v:  # NaN
                 return None
             return float(mean_v)
 
@@ -585,7 +522,6 @@ def generate_cross_sample_summary(
         seg_density = _get_mean("segment_density_per_mm3")
         avg_tortuosity = _get_mean("avg_tortuosity_au")
 
-        # 至少需要直径数据
         if avg_diameter is None:
             continue
 
@@ -604,30 +540,27 @@ def generate_cross_sample_summary(
     if not rows:
         return None
 
-    # --- 格式化输出 ---
-    out_path = os.path.join(output_root, "microvascular_cross_sample_summary.txt")
+    out_path = os.path.join(output_root, f"cross_sample_summary{DIAMETER_SUFFIX}.txt")
     sep = "=" * 100
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(f"{sep}\n")
-        f.write("  Vascular_Statistics — 跨样本微血管统计汇总（直径 < 10 μm）\n")
+        f.write(f"  Vascular_Statistics -- 跨样本次范围统计汇总（{DIAMETER_LABEL}）\n")
         f.write(f"{sep}\n")
         f.write(f"  样本数: {len(rows)}\n")
         f.write(f"  数据源: {output_root}\n")
-        f.write(f"  阈值: 直径 < 10 μm（半径 < 2.5 μm），节点数 >= 3\n")
+        f.write(f"  阈值: {DIAMETER_LABEL}，节点数 >= 3\n")
         f.write(f"{sep}\n\n")
 
-        # 表头
         header = (
             f"  {'样本':<50s} | {'组别':>10s} | {'批次':>6s} | {'时间点':>6s} "
-            f"| {'run数':>5s} | {'直径(μm)':>10s} | {'长度(μm)':>10s} "
+            f"| {'run数':>5s} | {'直径(um)':>10s} | {'长度(um)':>10s} "
             f"| {'段密度':>10s} | {'弯曲度':>8s}"
         )
         f.write(header + "\n")
         f.write("  " + "-" * (len(header) - 2) + "\n")
 
         for row in rows:
-            # 截断过长的 sample_key
             key_display = row["sample_key"]
             if len(key_display) > 49:
                 key_display = "..." + key_display[-(49 - 3):]
@@ -645,11 +578,11 @@ def generate_cross_sample_summary(
         f.write("\n")
         f.write(f"{sep}\n")
         f.write(
-            "方法: 各样本的 statistics_summary_micro.txt（多次骨架化运行的聚合值）"
-            "汇总为单一视图。\n"
+            f"方法: 各样本的 statistics_summary{DIAMETER_SUFFIX}.txt"
+            "（多次骨架化运行的聚合值）汇总为单一视图。\n"
         )
         f.write(
-            "指标: 平均直径(μm) / 平均长度(μm) / 段密度(seg/mm³) / "
+            "指标: 平均直径(um) / 平均长度(um) / 段密度(seg/mm^3) / "
             "平均弯曲度(a.u.)\n"
         )
         f.write(f"{sep}\n")

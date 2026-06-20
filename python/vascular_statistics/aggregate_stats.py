@@ -22,7 +22,7 @@ def parse_run_statistics(run_dir: str, suffix: str = "") -> Optional[Dict[str, A
 
     参数：
         run_dir: run_YYYYMMDD_HHMMSS 目录路径。
-        suffix: 统计文件后缀（"" = 主统计, "_micro" = 微血管统计）。
+        suffix: 统计文件后缀（"" = 主统计, "_d0-10um" = 0-10um 子范围）。
 
     返回：
         dict 含 4 项指标 + 段数 + 运行元数据，若目录无统计文件则返回 None。
@@ -100,7 +100,7 @@ def aggregate_sample_stats(
 
     参数：
         sample_dir: 样本目录路径（含 run_* 子目录）。
-        suffix: 统计文件后缀（"" = 主统计, "_micro" = 微血管统计）。
+        suffix: 统计文件后缀（"" = 主统计, "_d0-10um" = 0-10um 子范围）。
 
     返回：
         聚合 dict，含 runs 列表 + 均值/标准差 + 样本元数据，
@@ -223,13 +223,13 @@ def format_aggregate_stats(agg: Dict[str, Any], suffix: str = "") -> str:
 
     参数：
         agg: aggregate_sample_stats 返回的聚合 dict。
-        suffix: 统计文件后缀（"" = 主统计, "_micro" = 微血管统计）。
+        suffix: 统计文件后缀（"" = 主统计, "_d0-10um" = 0-10um 子范围）。
     """
     lines: List[str] = []
     sep = "=" * 78
 
-    is_micro = suffix == "_micro"
-    stat_label = "微血管统计汇总（直径 < 10 μm）" if is_micro else "样本统计汇总"
+    is_subrange = suffix == "_d0-10um"
+    stat_label = "子范围统计汇总（直径 0-10 um）" if is_subrange else "样本统计汇总"
 
     lines.append(sep)
     lines.append(f"  Vascular_Statistics — {stat_label}")
@@ -332,15 +332,15 @@ def format_aggregate_stats(agg: Dict[str, Any], suffix: str = "") -> str:
                 "注：段密度 = 有效段数 / 组织体积。"
                 "当前样本 volume 可能未正确设置，导致密度为 N/A。"
             )
-        elif is_micro:
+        elif is_subrange:
             lines.append(
-                "注：段密度 = 微血管段数 / 组织体积。"
-                "仅统计直径 < 10 μm 且节点数 >= 3 的微血管段。"
+                "注：段密度 = 子范围段数 / 组织体积。"
+                "仅统计直径 0-10 um 且节点数 >= 3 的血管段。"
             )
         else:
             lines.append(
                 "注：段密度 = 有效段数 / 组织体积。"
-                "直径 < 10 μm 的微血管段不计入。"
+                "直径 0-10 um 的血管段不计入。"
             )
         lines.append("")
 
@@ -373,7 +373,7 @@ def write_aggregate_stats(
 
     参数：
         sample_dir: 样本目录路径（同一级目录下的 run_* 将被扫描）。
-        suffix: 统计文件后缀（"" = 主统计, "_micro" = 微血管统计）。
+        suffix: 统计文件后缀（"" = 主统计, "_d0-10um" = 0-10um 子范围）。
 
     返回：
         写入的文件路径，若无有效数据返回 None。
@@ -403,7 +403,7 @@ def run_aggregation(
     参数：
         output_root: 输出根目录。
         sample_keys: 指定样本键列表。None = 全部。
-        suffix: 统计文件后缀（"" = 主统计, "_micro" = 微血管统计）。
+        suffix: 统计文件后缀（"" = 主统计, "_d0-10um" = 0-10um 子范围）。
 
     返回：
         {"processed": N, "skipped": N, "failed": N}
