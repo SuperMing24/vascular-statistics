@@ -122,6 +122,29 @@ def aggregate_sample_stats(
     if not runs_data:
         return None
 
+    # --- 口径一致性守卫（轨道 B）：检查 run 之间是否存在混口径 ---
+    calibers: List[str] = []
+    for entry in sorted(os.listdir(sample_dir)):
+        run_dir = os.path.join(sample_dir, entry)
+        if not entry.startswith("run_") or not os.path.isdir(run_dir):
+            continue
+        meta_path = os.path.join(run_dir, "run_meta.json")
+        if os.path.exists(meta_path):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    rm = json.load(f)
+                cm = rm.get("stats_unit_mode")
+                if cm:
+                    calibers.append(cm)
+            except (json.JSONDecodeError, OSError):
+                pass
+    if len(set(calibers)) > 1:
+        import warnings
+        warnings.warn(
+            f"口径混用: {sample_dir} 中同时存在 legacy 与 anisotropic 的 run，"
+            f"聚合结果的均值口径不一致，建议重跑为新口径后替换。"
+        )
+
     # 样本元数据（来自 sample_metadata.json）
     sample_meta: Dict[str, Any] = {}
     meta_path = os.path.join(sample_dir, "sample_metadata.json")

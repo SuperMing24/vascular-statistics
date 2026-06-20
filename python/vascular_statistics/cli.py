@@ -17,17 +17,33 @@ import click
 
 def _resolve_volume_from_cwd() -> float | None:
     """从 CWD 向上查找 sample_metadata.json，读取 tissue_volume_mm3。"""
+    meta = _read_sample_meta_upwards()
+    if meta is None:
+        return None
+    vol = meta.get("spatial", {}).get("tissue_volume_mm3")
+    return float(vol) if vol is not None else None
+
+
+def _resolve_spacing_from_cwd() -> list[float] | None:
+    """从 CWD 向上查找 sample_metadata.json，读取 voxel_spacing_um。"""
+    meta = _read_sample_meta_upwards()
+    if meta is None:
+        return None
+    spacing = meta.get("spatial", {}).get("voxel_spacing_um")
+    if spacing is not None and len(spacing) == 3:
+        return [float(v) for v in spacing]
+    return None
+
+
+def _read_sample_meta_upwards() -> dict | None:
+    """从 CWD 向上最多 3 层查找 sample_metadata.json。"""
     import json as _json
     cwd = os.getcwd()
-    # 尝试从当前目录向上最多 3 层查找 sample_metadata.json
     for _ in range(4):
         candidate = os.path.join(cwd, "sample_metadata.json")
         if os.path.exists(candidate):
             with open(candidate, "r", encoding="utf-8") as f:
-                meta = _json.load(f)
-            vol = meta.get("spatial", {}).get("tissue_volume_mm3")
-            if vol is not None:
-                return float(vol)
+                return _json.load(f)
         parent = os.path.dirname(cwd)
         if parent == cwd:
             break
@@ -181,7 +197,11 @@ def skeletonize(input, output, sampling, speed, dist, med):
     "--phases", default="all",
     type=click.Choice(["all", "skeletonize", "stats"]),
     help="执行哪些阶段。all=全流程; skeletonize=仅骨架化; stats=跳过骨架化(需已有 skeleton.pajek)")
-def pipeline(input, volume, output_stem, phases, sampling):
+@click.option(
+    "--anisotropic", is_flag=True, default=False,
+    help="启用各向异性 spacing 物理单位口径。从 sample_metadata.json 读取 voxel_spacing_um。"
+         "未设置则走 legacy 各向同性(×2/×4)，保持与历史输出一致。")
+def pipeline(input, volume, output_stem, phases, sampling, anisotropic):
     """完整管线：骨架化 → 格式转换 → 统计。
 
     用 --phases 可分阶段执行：
@@ -289,6 +309,19 @@ def pipeline(input, volume, output_stem, phases, sampling):
     click.echo(f"体积: {volume} mm^3")
 
     cmd = [exe, output_stem + "_edges", output_stem + "_vertices", str(volume)]
+    if anisotropic:
+        spacing = _resolve_spacing_from_cwd()
+        if spacing is None:
+            click.echo(
+                "--anisotropic 须有 sample_metadata.json（含 voxel_spacing_um）。"
+                "请先运行 extract-metadata。",
+                err=True,
+            )
+            raise click.Abort()
+        cmd += [str(spacing[0]), str(spacing[1]), str(spacing[2])]
+        click.echo(f"口径: 各向异性（spacing {spacing} μm/体素）")
+    else:
+        click.echo("口径: legacy 各向同性（×2/×4）")
     click.echo(f"执行: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=False)
     if result.returncode != 0:

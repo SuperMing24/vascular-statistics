@@ -26,6 +26,7 @@ def run(
     *,
     output_root: str = "",
     data_root: str = "",
+    anisotropic: bool = False,
 ) -> None:
     """完整管线：.mat/.tif 分割 → Pajek 骨架图 → C++ 统计。
 
@@ -37,6 +38,7 @@ def run(
         phases: "all" | "skeletonize" | "stats"（分阶段执行）。
         output_root: 输出根目录。
         data_root: 数据根目录。
+        anisotropic: 启用各向异性 spacing 物理单位（opt-in，从 sample_metadata.json 读取 voxel_spacing_um）。
     """
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     sys.path.insert(0, os.path.join(project_root, "python"))
@@ -167,7 +169,28 @@ def run(
         print(f"  编译 C++: {' '.join(compile_cmd)}")
         subprocess.run(compile_cmd, check=True)
 
-    subprocess.run([exe, output_stem + "_edges", output_stem + "_vertices", str(volume)], check=True)
+    # --- 单位：各向异性或 legacy ---
+    spacing_um = None
+    if anisotropic and output_root:
+        # 从样本的 sample_metadata.json 读取 voxel_spacing_um
+        sample_meta_path = os.path.join(output_root, sample_key, "sample_metadata.json")
+        if os.path.exists(sample_meta_path):
+            with open(sample_meta_path, "r", encoding="utf-8") as f:
+                sm = json.load(f)
+            spacing_um = sm.get("spatial", {}).get("voxel_spacing_um")
+    if anisotropic and not spacing_um:
+        import warnings
+        warnings.warn("--anisotropic 但未找到 voxel_spacing_um，回退 legacy。"
+                      "请先运行 extract-metadata。")
+        anisotropic = False  # 回退
+
+    cmd = [exe, output_stem + "_edges", output_stem + "_vertices", str(volume)]
+    if anisotropic and spacing_um:
+        cmd += [str(spacing_um[0]), str(spacing_um[1]), str(spacing_um[2])]
+        print(f"  口径: 各向异性（spacing {spacing_um}）")
+    else:
+        print(f"  口径: legacy 各向同性（×2/×4）")
+    subprocess.run(cmd, check=True)
     print(f"  完成。汇总: statistics_summary.txt")
 
     # --- 收尾：面向样本模式下写入 run_meta.json ---
@@ -181,7 +204,11 @@ def run(
             "phases": phases,
             "start_time": datetime.now(timezone(timedelta(hours=8))).isoformat(),
             "status": "completed",
+            "stats_unit_mode": "anisotropic" if anisotropic else "legacy",
         }
+        if spacing_um:
+            run_meta["spacing_um"] = spacing_um
+            run_meta["r_scale"] = (spacing_um[0] + spacing_um[1]) / 2.0
         meta_path = os.path.join(actual_output_dir, "run_meta.json")
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(run_meta, f, indent=2, ensure_ascii=False)
@@ -206,6 +233,8 @@ if __name__ == "__main__":
                         help="执行阶段（默认 all）")
     parser.add_argument("--output-root", "-o", default="", help="输出根目录（启用面向样本的输出结构）")
     parser.add_argument("--data-root", "-d", default="", help="数据根目录（面向样本模式下用于计算 sample_key）")
+    parser.add_argument("--anisotropic", action="store_true", default=False,
+                        help="启用各向异性 spacing 物理单位口径（从 sample_metadata.json 读取 voxel_spacing_um）")
 
     args = parser.parse_args()
 
@@ -217,4 +246,5 @@ if __name__ == "__main__":
         phases=args.phases,
         output_root=args.output_root,
         data_root=args.data_root,
+        anisotropic=args.anisotropic,
     )

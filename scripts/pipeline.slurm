@@ -125,11 +125,13 @@ OUTPUT_ROOT="/share/home/sukm/experiments/vs_vascstats"
 #   output_stem — 输出文件前缀（默认 "skeleton"）
 #   sampling    — 稀疏采样率 (1.0=最密, 2.0=快速, 默认 1.0)
 #   phases      — 执行阶段: all | skeletonize | stats（默认 all）
+#   anisotropic — 启用各向异性 spacing（默认空=legacy, "--anisotropic" 启用）
 INPUT_FILE="${1:?缺少输入文件参数}"
 VOLUME="${2:-}"
 OUTPUT_STEM="${3:-skeleton}"
 SAMPLING="${4:-1.0}"
 PHASES="${5:-all}"
+ANISOTROPIC="${6:-}"  # 传 "--anisotropic" 启用
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
@@ -359,6 +361,9 @@ PIPE_CMD=(
 if [ -n "$VOLUME" ]; then
     PIPE_CMD+=(--volume "$VOLUME")
 fi
+if [ "$ANISOTROPIC" = "--anisotropic" ]; then
+    PIPE_CMD+=(--anisotropic)
+fi
 
 echo "Command: ${PIPE_CMD[*]}"
 echo ""
@@ -437,8 +442,10 @@ fi
 
 # --- 写入 run_meta.json（单次运行的完整元数据，stats 阶段不单独记录） ---
 if [ "$PHASES" != "stats" ]; then
+# 口径标记：slurm 脚本负责写入 run_meta.json，从 sample_metadata.json 读取 spacing
 python -c "
-import json, os, sys
+import json, os
+
 meta = {
     'run_id': '$RUN_ID',
     'sample_key': '$SAMPLE_DIR',
@@ -454,6 +461,23 @@ meta = {
     'status': '$FINAL_STATUS',
     'commit': '$COMMIT_HASH',
 }
+
+# 口径标记（轨道 B）：各向异性模式下记录 spacing 供 micro/aggregate 识别
+anisotropic = '$ANISOTROPIC' == '--anisotropic'
+meta['stats_unit_mode'] = 'anisotropic' if anisotropic else 'legacy'
+
+if anisotropic:
+    sample_meta_path = os.path.join(
+        '$OUTPUT_ROOT', '$SAMPLE_DIR', 'sample_metadata.json')
+    if os.path.exists(sample_meta_path):
+        with open(sample_meta_path) as f:
+            sm = json.load(f)
+        spacing = sm.get('spatial', {}).get('voxel_spacing_um')
+        if spacing and len(spacing) == 3:
+            sx, sy, sz = float(spacing[0]), float(spacing[1]), float(spacing[2])
+            meta['spacing_um'] = [sx, sy, sz]
+            meta['r_scale'] = (sx + sy) / 2.0
+
 path = os.path.join('$JOB_OUTDIR', 'run_meta.json')
 with open(path, 'w') as f:
     json.dump(meta, f, indent=2, ensure_ascii=False)
