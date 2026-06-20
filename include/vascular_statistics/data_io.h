@@ -14,7 +14,7 @@ namespace vessel_stats {
 ///   generate_vessel_radius.txt      — 各段平均半径
 ///   generate_vessel_path_length.txt — 各段路径长度
 ///   generate_vessel_tortuosity.txt  — 各段弯曲度
-///   statistics_summary.txt          — 汇总统计
+///   statistics_summary_d10+um.txt    — 汇总统计（直径 >= 10 um 有效段）
 /// spacing（sx,sy,sz, μm/体素）：三者均 > 0 时启用各向异性物理单位
 /// （距离逐轴加权得 μm；半径→μm 标量 = (sx+sy)/2 XY 均值）。
 /// 任一 <= 0（默认）→ legacy 各向同性模式（×2 长度 / ×4 直径 / 2.5 体素阈值），

@@ -17,17 +17,24 @@ from typing import Any, Dict, List, Optional, Tuple
 # 解析单次运行的统计输出
 # ═══════════════════════════════════════════════════════════════════════
 
-def parse_run_statistics(run_dir: str, suffix: str = "") -> Optional[Dict[str, Any]]:
+# 子范围文件后缀常量（避免循环导入，与 subrange_stats.py 保持同步）
+SUFFIX_D10_PLUS = "_d10+um"
+
+
+def parse_run_statistics(run_dir: str, suffix: str = SUFFIX_D10_PLUS) -> Optional[Dict[str, Any]]:
     """解析单个 run_* 目录中的统计数据。
 
     参数：
         run_dir: run_YYYYMMDD_HHMMSS 目录路径。
-        suffix: 统计文件后缀（"" = 主统计, "_d0-10um" = 0-10um 子范围）。
+        suffix: 统计文件后缀（默认 _d10+um = >=10um 有效段, _d0-10um = 0-10um 子范围）。
 
     返回：
         dict 含 4 项指标 + 段数 + 运行元数据，若目录无统计文件则返回 None。
     """
     stats_path = os.path.join(run_dir, f"statistics_summary{suffix}.txt")
+    # 向后兼容：新文件名不存在时回退到旧名（无后缀）
+    if not os.path.exists(stats_path) and suffix == SUFFIX_D10_PLUS:
+        stats_path = os.path.join(run_dir, "statistics_summary.txt")
     meta_path = os.path.join(run_dir, "run_meta.json")
     vessel_path = os.path.join(run_dir, "generate_vessel.txt")
 

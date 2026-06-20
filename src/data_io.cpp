@@ -169,7 +169,8 @@ bool GenerateStatistics(const std::string& edges_file,
     std::ofstream out2("generate_vessel_radius.txt");
     std::ofstream out3("generate_vessel_path_length.txt");
     std::ofstream out4("generate_vessel_tortuosity.txt");
-    std::ofstream out5("statistics_summary.txt");
+    // 直径 >=10 um 为子范围（非完整统计），加 _d10+um 后缀。
+    std::ofstream out5("statistics_summary_d10+um.txt");
 
     if (!out1 || !out2 || !out3 || !out4 || !out5) {
         std::cerr << "创建输出文件失败\n";

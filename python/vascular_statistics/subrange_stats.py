@@ -2,7 +2,7 @@
 子范围统计模块 —— 从已有骨架化运行结果中按直径范围提取血管段统计。
 
 背景：
-  C++ 引擎输出的 statistics_summary.txt 仅统计直径 >= 10 um 的"有效段"，
+  C++ 引擎输出的 statistics_summary_d10+um.txt 仅统计直径 >= 10 um 的有效段，
   但 generate_vessel_radius.txt / generate_vessel_path_length.txt /
   generate_vessel_tortuosity.txt 中保留了全部血管段的明细数据。
   本模块从这些明细文件中按直径范围过滤（默认 0-10 um），
@@ -36,7 +36,8 @@ from typing import Any, Dict, List, Optional, Tuple
 # ============================================================================
 
 # 文件后缀与输出标签
-DIAMETER_SUFFIX = "_d0-10um"        # 子范围统计文件后缀
+DIAMETER_SUFFIX = "_d0-10um"        # 0-10 um 子范围文件后缀
+SUFFIX_D10_PLUS = "_d10+um"          # >=10 um 有效段子范围文件后缀
 DIAMETER_LABEL = "直径 0-10 um"     # 用于汇总/跨样本报告标题
 DIAMETER_LO_UM = 0.0                # 直径下界 (um)
 DIAMETER_HI_UM = 10.0               # 直径上界 (um)
@@ -406,7 +407,11 @@ def run_subrange_stats(
         for run_name in run_dirs:
             run_dir = os.path.join(sample_dir, run_name)
 
-            if not os.path.exists(os.path.join(run_dir, "statistics_summary.txt")):
+            # 检查 C++ 主统计是否已运行（新名 _d10+um，向后兼容旧名）
+            main_stats = os.path.join(run_dir, f"statistics_summary{SUFFIX_D10_PLUS}.txt")
+            if not os.path.exists(main_stats):
+                main_stats = os.path.join(run_dir, "statistics_summary.txt")
+            if not os.path.exists(main_stats):
                 continue
 
             sub_summary = os.path.join(run_dir, f"statistics_summary{DIAMETER_SUFFIX}.txt")

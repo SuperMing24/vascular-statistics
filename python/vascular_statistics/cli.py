@@ -328,7 +328,7 @@ def pipeline(input, volume, output_stem, phases, sampling, anisotropic):
         click.echo("C++ 统计执行失败。", err=True)
         raise click.Abort()
 
-    click.echo(f"管线完成。汇总文件: statistics_summary.txt")
+    click.echo(f"管线完成。汇总文件: statistics_summary_d10+um.txt")
 
 
 @main.command()
@@ -622,9 +622,9 @@ def extract_metadata_cmd(data_root, output_root, voxel_spacing_config,
 def aggregate_stats_cmd(output_root, sample_key):
     """汇总同一样本多次骨架化运行的形态学统计。
 
-    遍历每个样本目录下所有 run_*/statistics_summary.txt，
-    计算 4 项指标（直径 / 长度 / 段密度 / 弯曲度）的均值 ± 标准差，
-    将结果写入样本目录下的 statistics_summary.txt（与 sample_metadata.json 同级）。
+    遍历每个样本目录下所有 run_*/statistics_summary_d10+um.txt，
+    计算 4 项指标的均值 ± 标准差，
+    将结果写入样本目录下的 statistics_summary_d10+um.txt（与 sample_metadata.json 同级）。
 
     示例：
       vascular-stats aggregate-stats --output-root /share/home/sukm/experiments/vascstats

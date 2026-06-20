@@ -53,7 +53,7 @@ def test_end_to_end():
 
             # C++ 主统计文件（标记 run 已完成）
             with open(
-                os.path.join(run_dir, "statistics_summary.txt"), "w", encoding="utf-8"
+                os.path.join(run_dir, "statistics_summary_d10+um.txt"), "w", encoding="utf-8"
             ) as f:
                 f.write(
                     "Vascular_Statistics\n"
