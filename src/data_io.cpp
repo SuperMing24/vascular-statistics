@@ -355,17 +355,54 @@ bool GenerateStatistics(const std::string& edges_file,
         }
     }
 
-    // ---------- 计算汇总指标（均值 + 中位数 + 离群标记，轨道 A）----------
-    const int n_eff = static_cast<int>(eff_lengths.size());
+    // ---------- 计算汇总指标（百分位排除 + 均值/中位数，轨道 A v2）----------
+    const int n_eff_all = static_cast<int>(eff_lengths.size());
 
-    const double mean_radius = Mean(eff_radii);
-    const double mean_length = Mean(eff_lengths);
-    const double mean_tort = Mean(eff_torts);
-    const double median_radius = Median(eff_radii);
-    const double median_length = Median(eff_lengths);
-    const double median_tort = Median(eff_torts);
+    // --- P99 百分位排除（实际剔除，非仅标记）---
+    // 对段长取 P99 作为阈值，超出的段不纳入统计。
+    // P99 = 排除顶 1% 极端长尾；对正常样本影响小（~1%），
+    // 对过度连接样本会剔除极端连接段。
+    const double kPercentile = 99.0;  // P99
+    double p99_threshold = 0.0;
+    int n_excluded = 0;
+    if (n_eff_all > 0) {
+        std::vector<double> lengths_sorted = eff_lengths;
+        std::sort(lengths_sorted.begin(), lengths_sorted.end());
+        const size_t idx99 = static_cast<size_t>(
+            kPercentile / 100.0 * static_cast<double>(lengths_sorted.size()));
+        p99_threshold = (idx99 < lengths_sorted.size())
+                            ? lengths_sorted[idx99]
+                            : lengths_sorted.back();
+        n_excluded = static_cast<int>(lengths_sorted.size() - idx99);
+    }
 
-    // 离群段标记（只标记不剔除）：
+    // 构建排除后向量
+    std::vector<double> filt_radii, filt_lengths, filt_torts;
+    filt_radii.reserve(n_eff_all - n_excluded);
+    filt_lengths.reserve(n_eff_all - n_excluded);
+    filt_torts.reserve(n_eff_all - n_excluded);
+    for (int i = 0; i < n_eff_all; ++i) {
+        if (eff_lengths[i] <= p99_threshold) {
+            filt_radii.push_back(eff_radii[i]);
+            filt_lengths.push_back(eff_lengths[i]);
+            filt_torts.push_back(eff_torts[i]);
+        }
+    }
+    const int n_eff = static_cast<int>(filt_lengths.size());
+
+    // 排除后统计量
+    const double mean_radius = Mean(filt_radii);
+    const double mean_length = Mean(filt_lengths);
+    const double mean_tort = Mean(filt_torts);
+    const double median_radius = Median(filt_radii);
+    const double median_length = Median(filt_lengths);
+    const double median_tort = Median(filt_torts);
+
+    // 排除前均值（参考）
+    const double mean_length_all = Mean(eff_lengths);
+    const double mean_tort_all = Mean(eff_torts);
+
+    // 离群诊断（信息项，基于原始 eff_lengths，不影响统计）：
     //   MAD（k=3.5，相对/分布判据，单位无关）
     //   绝对兜底：各向异性下 path_length 为 μm → 1200μm；legacy 为体素 → 600
     const double kMadK = 3.5;
@@ -374,13 +411,16 @@ bool GenerateStatistics(const std::string& edges_file,
     for (double len : eff_lengths) {
         if (len > abs_length_threshold) ++abs_outliers;
     }
-    const double mad_ratio = n_eff > 0 ? 100.0 * mad_outliers / n_eff : 0.0;
-    const double abs_ratio = n_eff > 0 ? 100.0 * abs_outliers / n_eff : 0.0;
+    const double mad_ratio = n_eff_all > 0 ? 100.0 * mad_outliers / n_eff_all : 0.0;
+    const double abs_ratio = n_eff_all > 0 ? 100.0 * abs_outliers / n_eff_all : 0.0;
+    const double excluded_ratio = n_eff_all > 0 ? 100.0 * n_excluded / n_eff_all : 0.0;
 
     // ---------- 写汇总文件 ----------
     const std::string unit_note = anisotropic
         ? "（各向异性 spacing 物理单位）"
         : "（legacy 各向同性 2μm/体素）";
+    const std::string p99_unit = anisotropic ? " μm" : " 体素";
+
     out5 << "平均直径 (μm): " << mean_radius * 2.0 * r_scale << "\n"
          << "中位直径 (μm): " << median_radius * 2.0 * r_scale << "\n"
          << "平均长度 (μm): " << mean_length * length_um_factor << "\n"
@@ -389,18 +429,27 @@ bool GenerateStatistics(const std::string& edges_file,
          << "平均弯曲度: " << mean_tort << "\n"
          << "中位弯曲度: " << median_tort << "\n"
          << "有效段数: " << n_eff << "\n"
+         << "\n"
+         << "--- 百分位排除（P" << static_cast<int>(kPercentile)
+         << " = " << p99_threshold << p99_unit << "）---\n"
+         << "排除段数: " << n_excluded << " (" << excluded_ratio << "%)\n"
+         << "排除前有效段数: " << n_eff_all << "\n"
+         << "排除前平均长度: " << mean_length_all * length_um_factor
+         << (anisotropic ? " μm" : " 体素") << "\n"
+         << "排除前平均弯曲度: " << mean_tort_all << "\n"
+         << "\n"
+         << "--- 离群诊断（信息项，已由 P99 排除处理）---\n"
          << "MAD 离群段 (k=3.5): " << mad_outliers << " (" << mad_ratio << "%)\n"
          << "超绝对阈值段 (>" << abs_length_threshold
          << (anisotropic ? " μm" : " 体素") << "): " << abs_outliers
          << " (" << abs_ratio << "%)\n";
-    // ⚠️ 由绝对阈值比例驱动：过度连接的真实特征是段长绝对超限。
-    // MAD 比例仅作信息报告——段长分布天然右偏，MAD 在健康样本上也会标出
-    // 长尾的若干百分比（实测正常样本 2RWS 达 4.1%），不宜用作告警触发。
     if (abs_ratio > 1.0) {
         out5 << "⚠️ 注意：骨架可能存在过度连接（绝对超长段比例偏高）\n";
     }
-    out5 << "注：仅统计直径 >= 10 μm 且节点数 >= 3 的血管段；"
-            "中位数抗离群，离群段仅标记不剔除；单位口径"
+    out5 << "\n注：统计值基于 P" << static_cast<int>(kPercentile)
+         << " 排除后的 " << n_eff << " 个有效段（直径 >= 10 μm，节点数 >= 3）；"
+            "P99 排除顶 1% 极端长尾，排除的段写入明细文件但不参与统计；"
+            "单位口径"
          << unit_note << "\n";
 
     out1.close();

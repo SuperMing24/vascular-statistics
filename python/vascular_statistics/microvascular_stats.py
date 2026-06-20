@@ -209,19 +209,38 @@ def compute_micro_stats(
     micro_torts = [tortuosities[i] for i in micro_indices]
     micro_nodes = [node_sequences[i] for i in micro_indices]
 
-    n_micro = len(micro_radii)
+    n_micro_all = len(micro_radii)
+
+    # --- P99 百分位排除（实际剔除，与 C++ 一致）---
+    p99_threshold = 0.0
+    n_excluded = 0
+    if n_micro_all > 0:
+        sorted_lengths = sorted(micro_lengths)
+        idx99 = int(99.0 / 100.0 * len(sorted_lengths))
+        p99_threshold = sorted_lengths[idx99] if idx99 < len(sorted_lengths) else sorted_lengths[-1]
+        n_excluded = len(sorted_lengths) - idx99
+
+    # 排除后子集
+    filt_indices = [i for i, L in enumerate(micro_lengths) if L <= p99_threshold]
+    micro_radii_f = [micro_radii[i] for i in filt_indices]
+    micro_lengths_f = [micro_lengths[i] for i in filt_indices]
+    micro_torts_f = [micro_torts[i] for i in filt_indices]
+    n_micro = len(micro_radii_f)
+
+    # 排除前均值（参考）
+    avg_length_all = sum(micro_lengths) / n_micro_all * length_um if n_micro_all > 0 else 0.0
 
     # 直径 = 半径 × 2 × r_scale（legacy r_scale=2.0 → ×4，口径不变）
-    avg_radius = sum(micro_radii) / n_micro
+    avg_radius = sum(micro_radii_f) / n_micro if n_micro > 0 else 0.0
     avg_diameter = avg_radius * 2.0 * r_scale
-    median_diameter = statistics.median(micro_radii) * 2.0 * r_scale
+    median_diameter = statistics.median(micro_radii_f) * 2.0 * r_scale if n_micro > 0 else 0.0
 
     # 长度 = 体素距离 × length_um（legacy ×2，anisotropic ×1 因明细已为 μm）
-    avg_length = sum(micro_lengths) / n_micro * length_um
-    median_length = statistics.median(micro_lengths) * length_um
+    avg_length = sum(micro_lengths_f) / n_micro * length_um if n_micro > 0 else 0.0
+    median_length = statistics.median(micro_lengths_f) * length_um if n_micro > 0 else 0.0
 
-    # 弯曲度（过滤旧 C++ 运行中 path_direct_distance=0 产生的 inf/NaN）
-    valid_torts = [t for t in micro_torts if not (math.isnan(t) or math.isinf(t))]
+    # 弯曲度（排除后子集中过滤 inf/NaN）
+    valid_torts = [t for t in micro_torts_f if not (math.isnan(t) or math.isinf(t))]
     n_valid_torts = len(valid_torts)
     if n_valid_torts > 0:
         avg_tortuosity = sum(valid_torts) / n_valid_torts
@@ -231,18 +250,20 @@ def compute_micro_stats(
         median_tortuosity = float("nan")
     n_invalid_torts = n_micro - n_valid_torts
 
-    # 段密度 = 微血管段数 / 组织体积
+    # 段密度 = 微血管段数（排除后） / 组织体积
     segment_density = n_micro / volume if volume > 0 else float("nan")
 
-    # 离群段标记（只标记不剔除，对原始长度值计算）。
+    # 离群诊断（信息项，基于原始微血管段长度计算）。
     mad_outliers = _mad_outlier_count(micro_lengths, MAD_K)
     abs_outliers = sum(1 for x in micro_lengths if x > abs_thresh)
-    mad_ratio = 100.0 * mad_outliers / n_micro if n_micro > 0 else 0.0
-    abs_ratio = 100.0 * abs_outliers / n_micro if n_micro > 0 else 0.0
+    mad_ratio = 100.0 * mad_outliers / n_micro_all if n_micro_all > 0 else 0.0
+    abs_ratio = 100.0 * abs_outliers / n_micro_all if n_micro_all > 0 else 0.0
+    excluded_ratio = 100.0 * n_excluded / n_micro_all if n_micro_all > 0 else 0.0
 
     return {
         "n_segments_total": len(radii),
         "n_segments_micro": n_micro,
+        "n_segments_micro_all": n_micro_all,
         "avg_diameter_um": avg_diameter,
         "median_diameter_um": median_diameter,
         "avg_length_um": avg_length,
@@ -258,6 +279,11 @@ def compute_micro_stats(
         "abs_ratio": abs_ratio,
         "stats_unit_mode": mode,
         "r_scale": r_scale,
+        # P99 排除
+        "p99_threshold": p99_threshold,
+        "n_excluded": n_excluded,
+        "excluded_ratio": excluded_ratio,
+        "avg_length_before_exclusion": avg_length_all,
         # 过滤后的明细（供写入）
         "micro_radii": micro_radii,
         "micro_lengths": micro_lengths,
@@ -342,14 +368,24 @@ def write_micro_stats(
         f"段密度 (seg/mm³): {stats['segment_density_per_mm3']:.6f}",
         f"平均弯曲度: {stats['avg_tortuosity_au']:.6f}",
         f"中位弯曲度: {stats['median_tortuosity_au']:.6f}",
+        f"有效段数: {stats['n_segments_micro']}",
+        "",
+        f"--- 百分位排除（P99 = {stats['p99_threshold']:.2f} {abs_unit}）---",
+        f"排除段数: {stats['n_excluded']} ({stats['excluded_ratio']:.4f}%)",
+        f"排除前有效段数: {stats['n_segments_micro_all']}",
+        f"排除前平均长度: {stats['avg_length_before_exclusion']:.4f} {abs_unit}",
+        "",
+        f"--- 离群诊断（信息项，已由 P99 排除处理）---",
         f"MAD 离群段 (k={MAD_K}): {stats['mad_outliers']} ({stats['mad_ratio']:.4f}%)",
         f"超绝对阈值段 (>{abs_thresh:.0f} {abs_unit}): "
         f"{stats['abs_outliers']} ({stats['abs_ratio']:.4f}%)",
         warn_note,
         "",
-        f"注：仅统计直径 < 10 μm 且节点数 >= 3 的微血管段；"
-        f"中位数抗离群，离群段仅标记不剔除；单位口径 {unit_note}。",
-        f"总段数: {n_total}，微血管段数: {n_micro}",
+        f"注：统计值基于 P99 排除后的 {stats['n_segments_micro']} 个微血管段；"
+        f"微血管定义：直径 < 10 μm 且节点数 >= 3；"
+        f"P99 排除顶 1% 极端长尾，排除的段写入明细文件但不参与统计；"
+        f"单位口径 {unit_note}。",
+        f"总段数: {n_total}，微血管段数（排除前）: {stats['n_segments_micro_all']}",
         f"组织体积: {stats['volume_mm3']} mm³",
         invalid_note,
     ]
