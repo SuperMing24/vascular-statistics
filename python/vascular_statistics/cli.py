@@ -759,5 +759,46 @@ def micro_summary_cmd(output_root, sample_key):
     return diameter_summary_cmd(output_root, sample_key)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# TIFF 尺寸缩放（生成原图定制尺寸副本，不动原图）
+# ═══════════════════════════════════════════════════════════════════════
+
+@main.command("resize-tiff")
+@click.argument("input", type=click.Path(exists=True))
+@click.option("--xy", type=int, default=None, help="目标 XY 像素数（如 382）")
+@click.option("--scale", type=float, default=None, help="XY 缩放比例（与 --xy 二选一）")
+@click.option("--z", "z", type=int, default=None, help="目标 Z 层数（默认不缩放 Z）")
+@click.option("--binary", is_flag=True, default=False,
+              help="二值/标签图：最近邻 order=0（默认 order=1 线性，适合灰度原图）")
+@click.option("--order", type=int, default=None, help="插值阶数（覆盖默认）：0/1/3")
+@click.option("-o", "--output", default=None,
+              help="输出路径（默认 <stem>_resize<XY>.tiff，与源同目录）")
+def resize_tiff_cmd(input, xy, scale, z, binary, order, output):
+    """生成 TIFF 的定制尺寸副本（XY 网格对齐用，不动原图）。
+
+    用于把原图缩放到与某重采样骨架/金标准相同的网格，供配准/叠加，
+    无需改动或重生成骨架。仅缩放 XY，Z 默认保持。
+
+    示例：
+      vascular-stats resize-tiff img.tiff --xy 382
+      vascular-stats resize-tiff seg.tiff --xy 382 --binary
+    """
+    from vascular_statistics.tiff_resize import (
+        resize_tiff, default_output, resolve_order,
+    )
+
+    if xy is None and scale is None:
+        raise click.UsageError("须指定 --xy 或 --scale")
+
+    _order = resolve_order(order, binary)
+    out = output or default_output(input, xy, scale)
+
+    try:
+        resize_tiff(input, out, target_xy=xy, scale=scale, target_z=z, order=_order)
+    except (ValueError, OSError) as e:
+        click.echo(f"错误: {e}", err=True)
+        raise click.Abort()
+
+
 if __name__ == "__main__":
     main()
