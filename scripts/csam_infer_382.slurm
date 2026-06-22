@@ -6,11 +6,13 @@
 # ============================================================================
 
 #SBATCH --job-name=csam_inf_382
-#SBATCH --partition=gpu
+#SBATCH --partition=compute
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=00:30:00
+#SBATCH --requeue
+#SBATCH --signal=B:SIGTERM@120
 
 #SBATCH --output=/share/home/sukm/experiments/vs_2pfm_skelgt/logs/csam_infer_382_%j.out
 #SBATCH --error=/share/home/sukm/experiments/vs_2pfm_skelgt/logs/csam_infer_382_%j.err

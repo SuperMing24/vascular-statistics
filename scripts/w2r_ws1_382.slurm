@@ -63,8 +63,9 @@ echo "=============================================="
 echo ""
 
 # ---- 固定参数 ----
-INPUT_TIFF="/share/home/sukm/experiments/vs_2pfm_skelgt/csam_seg/W2R_20190903_ws1_csam_seg_resize382.tiff"
-OUTPUT_ROOT="/share/home/sukm/experiments/vs_2pfm_skelgt/w2r_ws1_382"
+# 方案B：原图 resize382 → CSAM 推理 → 分割（非旧版 resize 二值掩膜）
+INPUT_TIFF="/share/home/sukm/experiments/vs_2pfm_skelgt/csam_seg/W2R_20190903_ws1_csam_seg_382fromOriginal.tiff"
+OUTPUT_ROOT="/share/home/sukm/experiments/vs_2pfm_skelgt/w2r_ws1_382_planB"
 OUTPUT_STEM="skeleton"
 SAMPLING="2.0"
 SPEED="0.2"
