@@ -39,12 +39,20 @@ from vascular_statistics.image_preprocess import (  # noqa: E402
 )
 
 
-def derive_raw_rel(crop_rel: str) -> str:
-    """从 cropped 相对路径推导对应 raw 相对路径。"""
+def derive_raw_candidates(crop_rel: str) -> list:
+    """从 cropped 相对路径推导对应 raw 相对路径候选（按优先级）。
+
+    huaien cropped_z 结构不一致（部分在 .../angiogram/ 下、部分直接在 date_dir 下），
+    而 raw 统一在 .../angiogram/angiogram.mat。故返回多候选，由调用方取存在者：
+      1. 同目录 base.mat（xiaoqian 扁平 + huaien 含 angiogram/ 子目录）
+      2. 同目录插入 angiogram/ 子目录（huaien 不含 angiogram/ 子目录的样本）
+    """
     p = Path(crop_rel)
-    stem = p.stem  # 去 .mat
-    base = stem.split("_crop_")[0]
-    return str(p.with_name(base + ".mat")).replace("\\", "/")
+    base = p.stem.split("_crop_")[0]
+    return [
+        str(p.with_name(base + ".mat")).replace("\\", "/"),
+        str(p.parent / "angiogram" / (base + ".mat")).replace("\\", "/"),
+    ]
 
 
 def load_stack(mat_path: str) -> np.ndarray:
@@ -86,10 +94,11 @@ def main() -> None:
             print(f"  [SKIP] {sk}: catalog 缺 z_start/z_end")
             failed += 1
             continue
-        raw_rel = derive_raw_rel(crop_rel)
-        raw_path = os.path.join(args.raw_root, raw_rel)
-        if not os.path.exists(raw_path):
-            print(f"  [FAILED] {sk}: raw 不存在 {raw_path}")
+        cands = derive_raw_candidates(crop_rel)
+        raw_path = next((os.path.join(args.raw_root, r) for r in cands
+                         if os.path.exists(os.path.join(args.raw_root, r))), None)
+        if raw_path is None:
+            print(f"  [FAILED] {sk}: raw 不存在（候选 {cands}）")
             failed += 1
             continue
         try:
