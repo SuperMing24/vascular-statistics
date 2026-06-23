@@ -22,17 +22,21 @@ from typing import Optional, List
 # 服务器端路径（可通过环境变量或配置文件覆盖）
 # ══════════════════════════════════════════════════════════════════
 
-# Vascular_Extraction 项目根目录（服务器端）
-_EXTRACTION_ROOT = "/share/home/sukm/Vascular_Extraction"
+# Vascular_Extraction 项目根目录（服务器端，可经环境变量覆盖）
+_EXTRACTION_ROOT = os.environ.get(
+    "VASCULAR_EXTRACTION_ROOT", "/share/home/sukm/Vascular_Extraction"
+)
 
 # nnU-Net 2D 实验目录（seed22 — MiniVess 最优 seed）
-_NNUNET_EXP_DIR = (
-    "/share/home/sukm/experiments/phase0_baseline/"
-    "nnunet_2d_bce_dice_slice3_bs4/seed22"
+# 注：集群目录清理后实验根加了 ve_ 前缀（ve_phase0_baseline），旧路径已失效。
+_NNUNET_EXP_DIR = os.environ.get(
+    "NNUNET_EXP_DIR",
+    "/share/home/sukm/experiments/ve_phase0_baseline/"
+    "nnunet_2d_bce_dice_slice3_bs4/seed22",
 )
 
 # Conda 环境（含 PyTorch + MONAI + nibabel）
-_CONDA_ENV = "/share/home/sukm/conda_envs/vesseg"
+_CONDA_ENV = os.environ.get("VESSEG_CONDA_ENV", "/share/home/sukm/conda_envs/vesseg")
 
 
 def _resolve_project_root() -> str:
