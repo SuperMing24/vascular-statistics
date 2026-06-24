@@ -1,8 +1,14 @@
 """
-分割采样尺寸实验驱动（实验 artifact）
+分割采样尺寸实验驱动
 
 对 MiniVess 全 70 例 × 12 档尺寸：resize XY → 分割 → 上采样回512 → 对原生GT评测
 → 三元综合评分。端到端原生分辨率衡量（nnU-Net 标准）。
+
+GT 处理：GT 永远保持原生 512×512 不动；只把预测概率从 size-X 上采样回 512
+（nnU-Net 严格版 order=3 cubic spline），在原生分辨率对真值评测——非缩放 GT。
+
+原始推理保留：每例保存 size-X 推理概率到 infer_prob/（uint8 .nii.gz）。
+换上采样方式/阈值/指标可零成本重评，无需再推理。
 
 运行（vesseg 环境，GPU 节点）：
   python seg_resample_eval.py [--sizes 256 ...] [--limit N]
@@ -105,9 +111,15 @@ def main():
             vr = v if X == 512 else zoom(v, (X / 512, X / 512, 1), order=1)
             tmp = f'{sdir}/_tmp_{stem}.nii'
             nib.save(nib.Nifti1Image(vr.astype(np.float32), np.eye(4)), tmp)
-            prob = mgr.infer_volume_prob(tmp)
+            prob = mgr.infer_volume_prob(tmp)          # 原始推理概率（size-X 网格）
             os.remove(tmp)
-            pr = prob if X == 512 else np.clip(zoom(prob, (512 / X, 512 / X, 1), order=1), 0, 1)
+            # 保存原始推理输出（size-X 概率，uint8 压缩）→ 今后换上采样/阈值/指标
+            # 可零成本重评，无需再推理（设计要求：必须保留原始推理）
+            os.makedirs(f'{sdir}/infer_prob', exist_ok=True)
+            nib.save(nib.Nifti1Image((np.clip(prob, 0, 1) * 255).astype(np.uint8), np.eye(4)),
+                     f'{sdir}/infer_prob/{stem}.nii.gz')
+            # nnU-Net 严格版上采样：高阶 cubic spline(order=3) 上采样概率回原生 512，再阈值
+            pr = prob if X == 512 else np.clip(zoom(prob, (512 / X, 512 / X, 1), order=3), 0, 1)
             # 形状对齐保护（zoom 取整可能差 1px）
             if pr.shape != g.shape:
                 pr = pr[:g.shape[0], :g.shape[1], :g.shape[2]]

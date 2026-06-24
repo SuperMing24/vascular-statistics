@@ -11,5 +11,7 @@
 #SBATCH --error=/share/home/sukm/experiments/vs_seg_resample/job_%j.err
 
 source ~/.bashrc
+# 注：原始 size-X 推理概率默认保存（infer_prob/，可复用重评）；
+#     不再 --save-masks（512 二值可从概率派生，省盘）
 /share/home/sukm/conda_envs/vesseg/bin/python \
-    /share/home/sukm/vascular-statistics/scripts/experiments/seg_resample_eval.py --save-masks
+    /share/home/sukm/vascular-statistics/scripts/experiments/seg_resample_eval.py
