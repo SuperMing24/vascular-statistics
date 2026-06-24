@@ -8,8 +8,10 @@
 #SBATCH --output=/share/home/sukm/experiments/lab_data_seg_384/job_%j.out
 #SBATCH --error=/share/home/sukm/experiments/lab_data_seg_384/job_%j.err
 
-set -euo pipefail
+set +u
 source ~/.bashrc
+set -u
+set -eo pipefail
 
 # 384 批量分割：huaien 41 + xiaoqian 104 cropped_z → TIFF 掩码
 VESSEG=/share/home/sukm/conda_envs/vesseg/bin/python
