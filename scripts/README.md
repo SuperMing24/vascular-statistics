@@ -12,6 +12,7 @@
 | `pipeline.slurm` | 端到端管线 Slurm 模板（骨架化 → 转换 → 统计） |
 | `batch_launch.sh` | 批量提交包装器（manifest + 断点续跑 + 过滤） |
 | `run_pipeline.py` | 端到端管线 Python 入口 |
+| `seg_batch_resample.py` | 批量分割（带 XY 重采样）：cropped_z .mat → 指定尺寸掩码 |
 
 ## `data/`：数据准备 + 元数据工具（reusable）
 
