@@ -12,7 +12,7 @@
 运行（vesseg 环境，GPU 节点）：
   python scripts/seg_batch_resample.py \\
     --crop-root /share/.../huaien/cropped_z --resize 384 \\
-    --out-root  /share/.../experiments/lab_data_seg_384/huaien
+    --out-root  /share/.../experiments/vs_seg_384/huaien
 """
 import argparse
 import json

@@ -20,7 +20,7 @@ VAL_IMG  = '/share/home/sukm/datasets/MiniVess/val/images'
 VAL_MASK = '/share/home/sukm/datasets/MiniVess/val/masks'
 EXP      = '/share/home/sukm/experiments/ve_phase0_baseline/nnunet_2d_bce_dice_slice3_bs4/seed22'
 PREDICT  = '/share/home/sukm/Vascular_Extraction/src/scripts/predict.py'
-AB       = '/share/home/sukm/experiments/ab_minivess_gt'
+AB       = '/share/home/sukm/experiments/vs_preproc_gt'
 
 
 def main():

@@ -3,7 +3,7 @@
 # 用于 cropped_z 预处理 A/B（见 docs/preprocessing_ab_gt_report_20260624.md）
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate vascstats
-AB=/share/home/sukm/experiments/ab_preprocess
+AB=/share/home/sukm/experiments/vs_preproc_ab
 for V in huaien_none huaien_bgsub huaien_percentile xiaoqian_none xiaoqian_bgsub xiaoqian_percentile; do
   for mat in $(find $AB/$V -name '*.mat' | sort); do
     stem=$(basename $mat .mat)

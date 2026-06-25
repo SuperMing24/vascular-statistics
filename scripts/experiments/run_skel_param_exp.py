@@ -1,7 +1,9 @@
 """
 骨架化参数实验（sampling × speed）—— 2PFM 金标准匹配
 
-对 2PFM 清洁金标准样本（仅拓扑+生理均正常者），用 Task 1 选定的 384 分割尺寸：
+对 2PFM 清洁金标准样本，用金标准原生网格（W1N/W2N=363，W2R=382）：
+  CSAM seg(512) → resize 到金标准网格 → LFD 骨架化(sampling,speed)
+  → .pajek + 挂墙耗时 → skeleton_match_3d(物理 μm, δ) vs 金标准 .pajek
   CSAM seg(512) → resize 384(order=1+阈值) → LFD 骨架化(sampling,speed)
   → .pajek + 挂墙耗时 → skeleton_match_3d(物理 μm, δ) vs 金标准 .pajek
   → 健康度 + 匹配度(completeness/correctness/quality)
@@ -10,7 +12,7 @@
 生理畸变），仅用清洁金标准。
 
 匹配口径（算法已对 Chap_4 §4.7 逐式复核）：
-  - 预测骨架在 384 网格，有效间距 = FOV/384（2PFM FOV=512×1.37=701.44μm → 1.827μm/px）
+  - 预测骨架在 363/382 网格，有效间距 = FOV/363 或 FOV/382（金标准网格）
   - 金标准在原生网格（W1N/W2N=363→1.932；W2R=382→1.836），z=2.0
   - δ=3.7μm（≈金标准 2px，对齐 Chap_4 2 像素容差）
 
@@ -33,14 +35,20 @@ from skeleton_match_3d import parse_pajek, skeleton_health, skeleton_matching
 
 SEG_DIR = '/share/home/sukm/experiments/vs_2pfm_skelgt/csam_seg'
 GOLD_DIR = '/share/home/sukm/datasets/2PFM_SkelGT/skeletons'
-FOV_UM = 512 * 1.37  # 2PFM 横向 FOV（μm）
-RESIZE = 384
+FOV_UM = 512 * 1.37  # 2PFM 横向 FOV（μm）= 701.44
 DELTA_UM = 3.7
 
 # 清洁金标准（用户 2.1：排除 W1N_ref/W2N_ws1/W2R_ref 过度连接畸变样本）
 CLEAN = ['W1N_20190920_ws1', 'W2N_20190911_ref', 'W2N_20190911_ws2', 'W2R_20190903_ws1']
-# 金标准原生 XY 网格（节点坐标空间）：W2R=382，其余=363
-GOLD_GRID = {'W2R_20190903_ws1': 382}  # 默认 363
+# 金标准原生 XY 网格 + 对应分割输入尺寸（用户 1.2）：
+#   骨架化半径计算依赖网格正确性——须用金标准原 grid，非 384
+#   W1N/W2N = 363 grid(1.932μm/px)，W2R = 382 grid(1.836μm/px)
+SAMPLE_GRID = {
+    'W1N_20190920_ws1': 363,
+    'W2N_20190911_ref': 363,
+    'W2N_20190911_ws2': 363,
+    'W2R_20190903_ws1': 382,
+}
 
 # sampling × speed 配置（覆盖快慢两极 + 单变量对照）
 CONFIGS = [
@@ -61,12 +69,10 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     configs = CONFIGS[:args.limit_config] if args.limit_config else CONFIGS
 
-    pred_sp = [round(FOV_UM / RESIZE, 4)] * 2 + [2.0]   # 384 网格有效间距
     results = []
     for samp in args.samples:
         seg_tif = os.path.join(SEG_DIR, samp + '_csam_seg.tiff')
         if not os.path.exists(seg_tif):
-            # 兜底找匹配文件
             cand = [f for f in os.listdir(SEG_DIR) if samp in f and f.endswith('.tiff')]
             if not cand:
                 print(f'[SKIP] {samp}: 无 CSAM seg'); continue
@@ -74,29 +80,30 @@ def main():
         gold = os.path.join(GOLD_DIR, samp + '.pajek')
         if not os.path.exists(gold):
             print(f'[SKIP] {samp}: 无金标准 .pajek'); continue
-        gg = GOLD_GRID.get(samp, 363)
-        gold_sp = [round(FOV_UM / gg, 4)] * 2 + [2.0]
+
+        grid_size = SAMPLE_GRID.get(samp, 363)           # 用户 1.2：须用金标准原 grid
+        spacing = [round(FOV_UM / grid_size, 4)] * 2 + [2.0]  # pred 与 gold 同网格
         gc, ge, gmap = parse_pajek(gold)
 
-        # 读 seg(512, [D,H,W])→[H,W,D]，resize XY 到 384
+        # 读 seg(512, [D,H,W])→[H,W,D]，resize XY 到金标准网格
         arr = tifffile.imread(seg_tif)
         seg = np.transpose(arr, (1, 2, 0)) if arr.ndim == 3 else arr[..., None]
         seg = (seg > 0).astype(np.float32)
-        f = RESIZE / seg.shape[0]
-        seg384 = (zoom(seg, (f, f, 1), order=1) > 0.5).astype(np.uint8) * 255
+        f = grid_size / seg.shape[0]
+        seg_resized = (zoom(seg, (f, f, 1), order=1) > 0.5).astype(np.uint8) * 255
 
         sdir = os.path.join(args.out_dir, samp)
         os.makedirs(sdir, exist_ok=True)
-        seg384_tif = os.path.join(sdir, 'seg384.tiff')
-        tifffile.imwrite(seg384_tif, np.transpose(seg384, (2, 0, 1)), photometric='minisblack')
+        seg_tif_out = os.path.join(sdir, f'seg{grid_size}.tiff')
+        tifffile.imwrite(seg_tif_out, np.transpose(seg_resized, (2, 0, 1)), photometric='minisblack')
 
         for cfg in configs:
             tag = f"s{cfg['sampling']}_sp{cfg['speed']}"
             pajek_out = os.path.join(sdir, f'skel_{tag}.pajek')
-            print(f'=== {samp} / {tag} 骨架化 ===', flush=True)
+            print(f'=== {samp} / {tag} 骨架化 (grid={grid_size}) ===', flush=True)
             t0 = time.time()
             rc = subprocess.run(
-                [sys.executable, '-m', 'vascular_statistics.cli', 'skeletonize', seg384_tif,
+                [sys.executable, '-m', 'vascular_statistics.cli', 'skeletonize', seg_tif_out,
                  '-o', pajek_out, '--sampling', str(cfg['sampling']), '--speed', str(cfg['speed'])],
                 capture_output=True, text=True)
             elapsed = time.time() - t0
@@ -107,13 +114,13 @@ def main():
                 continue
             pc, pe, pmap = parse_pajek(pajek_out)
             health = skeleton_health(pc, pe, pmap)
-            match = skeleton_matching(pc, gc, pred_sp, gold_sp, DELTA_UM)
+            match = skeleton_matching(pc, gc, spacing, spacing, DELTA_UM)
             rec = {'sample': samp, 'config': tag, 'sampling': cfg['sampling'], 'speed': cfg['speed'],
-                   'elapsed_s': round(elapsed, 1), 'status': 'ok',
+                   'grid_size': grid_size, 'elapsed_s': round(elapsed, 1), 'status': 'ok',
                    'health': health, 'matching': match,
-                   'pred_spacing': pred_sp, 'gold_spacing': gold_sp, 'delta_um': DELTA_UM}
+                   'spacing': spacing, 'delta_um': DELTA_UM}
             results.append(rec)
-            print(f"  耗时 {elapsed:.0f}s | 节点 {health['n_nodes']} | "
+            print(f"  耗时 {elapsed:.0f}s | grid={grid_size} 节点 {health['n_nodes']} | "
                   f"comp={match['completeness']:.3f} corr={match['correctness']:.3f} "
                   f"qual={match['quality']:.3f} | defects={health['total_defects']}", flush=True)
 
