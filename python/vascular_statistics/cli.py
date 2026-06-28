@@ -25,7 +25,7 @@ def _resolve_volume_from_cwd() -> float | None:
 
 
 def _resolve_spacing_from_cwd() -> list[float] | None:
-    """从 CWD 向上查找 sample_metadata.json，读取 voxel_spacing_um。"""
+    """从 CWD 向上查找 sample_metadata.json，读取 voxel_spacing_um（native 采集 spacing）。"""
     meta = _read_sample_meta_upwards()
     if meta is None:
         return None
@@ -33,6 +33,75 @@ def _resolve_spacing_from_cwd() -> list[float] | None:
     if spacing is not None and len(spacing) == 3:
         return [float(v) for v in spacing]
     return None
+
+
+# ───────────────────────────────────────────────────────────────────────
+# 方案 A：半径 μm 转换随骨架化网格联动
+#
+# 背景：血管半径在骨架化阶段以「该网格的像素」为单位计算（各向同性距离变换，
+# 见 docs/radius_computation_resampling_analysis_20260628.md）。物理 μm 转换在
+# C++ stats 经 r_scale=(sx+sy)/2 完成。**前提是 stats 拿到的 spacing 必须是骨架化
+# 实际网格的 μm/体素**，而非 native 采集 spacing——否则半径偏差 (native_size/grid) 倍。
+#
+# 物理视场 FOV 与采样无关、是不变量：FOV[轴] = native_size × native_spacing。
+# 重采样到网格 X 后：effective_spacing[轴] = FOV[轴] / X = native_spacing × native_size / X。
+#
+# 实现：骨架化阶段（此时实际网格已知）算出 effective spacing，写入**每运行**的旁车文件
+# `<stem>_voxel_spacing_um.txt`（不写共享 sample_metadata.json——同一样本可在不同网格
+# 骨架化，写共享字段会歧义）。stats 阶段优先读旁车，缺省回退 native（无重采样时二者相等）。
+# ───────────────────────────────────────────────────────────────────────
+
+def _run_spacing_path(stem: str) -> str:
+    """每运行的有效 spacing 旁车文件路径。"""
+    return stem + "_voxel_spacing_um.txt"
+
+
+def _effective_spacing_from_grid(
+    native_spacing: list[float],
+    native_shape: list[int],
+    current_shape: list[int],
+) -> list[float]:
+    """由骨架化实际网格反推有效体素 spacing（μm/体素）。
+
+    effective_spacing[轴] = native_spacing[轴] × native_size[轴] / current_size[轴]。
+
+    轴序对齐（关键，易错）：spacing 是 [x, y, z]，shape 是 [D, H, W] = [z, y, x]：
+        x ↔ W = shape[2]，y ↔ H = shape[1]，z ↔ D = shape[0]。
+    无重采样（current==native）时返回 native_spacing 本身。
+    """
+    axis_to_dim = (2, 1, 0)  # spacing 索引 [x,y,z] → shape 维度 [W,H,D]
+    eff: list[float] = []
+    for sp_idx, dim in enumerate(axis_to_dim):
+        ratio = native_shape[dim] / current_shape[dim]
+        eff.append(round(float(native_spacing[sp_idx]) * ratio, 6))
+    return eff
+
+
+def _write_run_spacing_sidecar(stem: str, current_shape: list[int]) -> list[float] | None:
+    """骨架化阶段调用：算出本运行有效 spacing 并写旁车，返回该 spacing（无 metadata 则 None）。"""
+    meta = _read_sample_meta_upwards()
+    if meta is None:
+        return None
+    native_sp = meta.get("spatial", {}).get("voxel_spacing_um")
+    native_shape = meta.get("stack_properties", {}).get("shape")
+    if not native_sp or not native_shape or len(native_sp) != 3 or len(native_shape) != 3:
+        return None
+    eff = _effective_spacing_from_grid(native_sp, native_shape, list(current_shape))
+    with open(_run_spacing_path(stem), "w", encoding="utf-8") as f:
+        f.write(",".join(str(v) for v in eff) + "\n")
+    return eff
+
+
+def _resolve_spacing(stem: str | None = None) -> list[float] | None:
+    """解析有效 spacing：优先本运行旁车（已含网格校正），回退 native metadata。"""
+    if stem is not None:
+        sidecar = _run_spacing_path(stem)
+        if os.path.exists(sidecar):
+            with open(sidecar, "r", encoding="utf-8") as f:
+                parts = [p.strip() for p in f.read().strip().split(",")]
+            if len(parts) == 3:
+                return [float(v) for v in parts]
+    return _resolve_spacing_from_cwd()
 
 
 def _read_sample_meta_upwards() -> dict | None:
@@ -240,6 +309,14 @@ def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic):
         voxel_count = int((stack > 0).sum())
         click.echo(f"已加载分割: {stack.shape}, 前景体素数: {voxel_count}")
 
+        # 方案 A：按骨架化实际网格写有效 spacing 旁车（半径 μm 转换随网格联动）
+        eff_sp = _write_run_spacing_sidecar(output_stem, list(stack.shape))
+        if eff_sp is not None:
+            click.echo(
+                f"有效 spacing（网格 {list(stack.shape)} → FOV/grid）: {eff_sp} μm/体素 "
+                f"→ {_run_spacing_path(output_stem)}"
+            )
+
         sk = Skeleton(label=stack, sampling=sampling,
                       speed_param=speed, dist_param=0.5, med_param=0.5)
         sk.Update()
@@ -313,7 +390,8 @@ def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic):
 
     cmd = [exe, output_stem + "_edges", output_stem + "_vertices", str(volume)]
     if anisotropic:
-        spacing = _resolve_spacing_from_cwd()
+        # 优先读骨架化阶段写入的有效 spacing 旁车（含网格校正），缺省回退 native
+        spacing = _resolve_spacing(output_stem)
         if spacing is None:
             click.echo(
                 "--anisotropic 须有 sample_metadata.json（含 voxel_spacing_um）。"
