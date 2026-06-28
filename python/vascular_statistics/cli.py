@@ -9,6 +9,8 @@ Click CLI — Vascular_Statistics 统一命令行入口。
     python -m vascular_statistics.cli gui
 """
 
+from __future__ import annotations
+
 import os
 import subprocess
 
