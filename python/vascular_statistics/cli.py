@@ -379,9 +379,10 @@ def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic, p
                 click.echo("--physical-radius 须有 sample_metadata.json（含 voxel_spacing_um + shape）。",
                            err=True)
                 raise click.Abort()
-            from VascGraph.Skeletonize import GenerateGraph as _gg
-            _gg_restore = (_gg, _gg.DistMap3D)
-            _gg.DistMap3D = _make_anisotropic_distmap(eff_sp)
+            import importlib as _il
+            _gg_mod = _il.import_module("VascGraph.Skeletonize.GenerateGraph")
+            _gg_restore = (_gg_mod, _gg_mod.DistMap3D)
+            _gg_mod.DistMap3D = _make_anisotropic_distmap(eff_sp)
             with open(output_stem + "_radius_unit.txt", "w", encoding="utf-8") as f:
                 f.write("um\n")  # 溯源标记：本 .pajek 的 r 为物理 μm（方案B）
             click.echo(f"半径口径【方案B】：物理 μm（各向异性 EDT sampling≈{eff_sp}）—— pajek 中 r 为 μm")
