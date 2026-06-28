@@ -60,7 +60,8 @@ bool GenerateStatistics(const std::string& edges_file,
                         double volume,
                         double sx,
                         double sy,
-                        double sz) {
+                        double sz,
+                        bool radius_physical) {
     // ---------- 第 1 遍：打开边文件，找最大节点编号 ----------
     std::ifstream in(edges_file + ".txt");
     if (!in) {
@@ -184,13 +185,17 @@ bool GenerateStatistics(const std::string& edges_file,
     // 提供 spacing（sx,sy,sz 均 > 0）→ 各向异性物理单位（μm）：
     //   距离逐轴加权；半径→μm 标量 r_scale = (sx+sy)/2（XY 均值，横截面在面内成像）。
     // 未提供 → legacy 各向同性（沿用 ×2 长度 / ×4 直径 / 2.5 体素阈值），向后兼容。
+    // 【方案B】radius_physical：节点 r 已是物理 μm（骨架化各向异性 EDT）→ r_scale=1.0，
+    //   半径不再缩放（直径=2r μm，阈值随式自动变 10/(2·1)=5μm）；位置仍用 spacing 算长度。
     const bool anisotropic = (sx > 0.0 && sy > 0.0 && sz > 0.0);
     const double ex = anisotropic ? sx : 1.0;
     const double ey = anisotropic ? sy : 1.0;
     const double ez = anisotropic ? sz : 1.0;
-    const double r_scale = anisotropic ? (sx + sy) / 2.0 : 2.0;
+    const double r_scale = radius_physical ? 1.0
+                         : (anisotropic ? (sx + sy) / 2.0 : 2.0);
     const double length_um_factor = anisotropic ? 1.0 : 2.0;
-    // 有效段半径阈值（体素）：锁住直径 10μm → radius ≥ 10/(2·r_scale)。legacy→2.5。
+    // 有效段半径阈值：锁住直径 10μm → radius ≥ 10/(2·r_scale)。
+    //   各向异性像素半径→(sx+sy)/2 标量；方案B 物理 μm→r_scale=1 故阈值=5μm；legacy→2.5。
     const double radius_threshold_voxel = 10.0 / (2.0 * r_scale);
     // 绝对兜底：各向异性下 path_length 已是 μm → 1200μm；legacy 为体素 → 600。
     const double abs_length_threshold = anisotropic ? 1200.0 : 600.0;
@@ -418,9 +423,10 @@ bool GenerateStatistics(const std::string& edges_file,
     const double excluded_ratio = n_eff_all > 0 ? 100.0 * n_excluded / n_eff_all : 0.0;
 
     // ---------- 写汇总文件 ----------
-    const std::string unit_note = anisotropic
-        ? "（各向异性 spacing 物理单位）"
-        : "（legacy 各向同性 2μm/体素）";
+    const std::string unit_note = radius_physical
+        ? "（各向异性 spacing；半径=物理 μm 各向异性 EDT，方案B r_scale=1）"
+        : (anisotropic ? "（各向异性 spacing 物理单位；半径标量 r_scale=(sx+sy)/2）"
+                       : "（legacy 各向同性 2μm/体素）");
     const std::string p99_unit = anisotropic ? " μm" : " 体素";
 
     out5 << "平均直径 (μm): " << mean_radius * 2.0 * r_scale << "\n"

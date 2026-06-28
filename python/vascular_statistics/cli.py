@@ -104,6 +104,38 @@ def _resolve_spacing(stem: str | None = None) -> list[float] | None:
     return _resolve_spacing_from_cwd()
 
 
+# ───────────────────────────────────────────────────────────────────────
+# 方案 B：各向异性 EDT —— 半径直接以物理 μm 计算
+#
+# 现状（方案A 之前）：半径 = 各向同性距离变换（DistMap3D，max-of-3 2D EDT）的「网格像素」
+# 值，C++ 再用标量 r_scale=(ex+ey)/2 转 μm（忽略 z + XY 标量近似，见
+# docs/radius_computation_resampling_analysis_20260628.md §8）。
+#
+# 方案B：把骨架化内部的距离变换换成 scipy 各向异性 EDT，sampling=物理 spacing →
+# 距离直接以 μm 出 → **pajek 中 r 即物理 μm**，各向异性精确、grid 不变、保留最近壁真实方向。
+# 这是「在 EDT 源头各向异性化」，而非事后用标量补偿。
+#
+# 实现：临时 monkeypatch `VascGraph.Skeletonize.GenerateGraph.DistMap3D`（该模块通过
+# `from CalcTools import *` 绑入该名，故须打此命名空间），骨架化后还原。**不改上游文件**。
+# 轴序：Label 为 [D,H,W]=[z,y,x]（pipeline 约定），故 EDT sampling=(sz,sy,sx)。
+# ───────────────────────────────────────────────────────────────────────
+
+def _make_anisotropic_distmap(spacing_xyz: list[float]):
+    """返回替换 DistMap3D 的各向异性 EDT 函数：半径直接出 μm。
+
+    spacing_xyz = [sx, sy, sz]（x,y,z 序）。Label 轴序 [D,H,W]=[z,y,x]，
+    故 EDT sampling=(sz, sy, sx)=(spacing[2], spacing[1], spacing[0])。
+    distance_transform_edt 计算前景(非0)到最近背景(0)的距离 = 到血管壁距离 = 半径。
+    """
+    from scipy.ndimage import distance_transform_edt
+    sampling = (spacing_xyz[2], spacing_xyz[1], spacing_xyz[0])  # [D,H,W]→(z,y,x)
+
+    def _distmap(Label):
+        return distance_transform_edt(Label > 0, sampling=sampling)
+
+    return _distmap
+
+
 def _read_sample_meta_upwards() -> dict | None:
     """从 CWD 向上最多 3 层查找 sample_metadata.json。"""
     import json as _json
@@ -273,7 +305,12 @@ def skeletonize(input, output, sampling, speed, dist, med):
     "--anisotropic", is_flag=True, default=False,
     help="启用各向异性 spacing 物理单位口径。从 sample_metadata.json 读取 voxel_spacing_um。"
          "未设置则走 legacy 各向同性(×2/×4)，保持与历史输出一致。")
-def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic):
+@click.option(
+    "--physical-radius", "physical_radius", is_flag=True, default=False,
+    help="【方案B】骨架化用各向异性 EDT（scipy sampling=spacing）→ pajek 中 r 直接为物理 μm，"
+         "而非各向同性像素。隐含 --anisotropic；stats 阶段 r_scale=1.0 避免二次缩放。"
+         "⚠️ 改变 r 的单位：开启后 .pajek 的 r 是 μm，未开启是网格像素。需 sample_metadata.json。")
+def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic, physical_radius):
     """完整管线：骨架化 → 格式转换 → 统计。
 
     用 --phases 可分阶段执行：
@@ -317,9 +354,27 @@ def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic):
                 f"→ {_run_spacing_path(output_stem)}"
             )
 
+        # 方案 B：可选——骨架化用各向异性 EDT，半径直接出物理 μm
+        _gg_restore = None  # (模块, 原 DistMap3D)，用于 finally 还原
+        if physical_radius:
+            if eff_sp is None:
+                click.echo("--physical-radius 须有 sample_metadata.json（含 voxel_spacing_um + shape）。",
+                           err=True)
+                raise click.Abort()
+            from VascGraph.Skeletonize import GenerateGraph as _gg
+            _gg_restore = (_gg, _gg.DistMap3D)
+            _gg.DistMap3D = _make_anisotropic_distmap(eff_sp)
+            with open(output_stem + "_radius_unit.txt", "w", encoding="utf-8") as f:
+                f.write("um\n")  # 溯源标记：本 .pajek 的 r 为物理 μm（方案B）
+            click.echo(f"半径口径【方案B】：物理 μm（各向异性 EDT sampling≈{eff_sp}）—— pajek 中 r 为 μm")
+
         sk = Skeleton(label=stack, sampling=sampling,
                       speed_param=speed, dist_param=0.5, med_param=0.5)
-        sk.Update()
+        try:
+            sk.Update()
+        finally:
+            if _gg_restore is not None:
+                _gg_restore[0].DistMap3D = _gg_restore[1]  # 还原上游 DistMap3D
         graph = Tools.CalcTools.fixG(sk.GetOutput())
 
         pajek_path = output_stem + ".pajek"
@@ -389,18 +444,22 @@ def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic):
     click.echo(f"体积: {volume} mm^3")
 
     cmd = [exe, output_stem + "_edges", output_stem + "_vertices", str(volume)]
-    if anisotropic:
+    if anisotropic or physical_radius:
         # 优先读骨架化阶段写入的有效 spacing 旁车（含网格校正），缺省回退 native
         spacing = _resolve_spacing(output_stem)
         if spacing is None:
             click.echo(
-                "--anisotropic 须有 sample_metadata.json（含 voxel_spacing_um）。"
+                "--anisotropic/--physical-radius 须有 sample_metadata.json（含 voxel_spacing_um）。"
                 "请先运行 extract-metadata。",
                 err=True,
             )
             raise click.Abort()
         cmd += [str(spacing[0]), str(spacing[1]), str(spacing[2])]
         click.echo(f"口径: 各向异性（spacing {spacing} μm/体素）")
+        if physical_radius:
+            # 第 7 参 radius_physical=1 → C++ r_scale=1.0（半径已是 μm，避免二次缩放）
+            cmd += ["1"]
+            click.echo("半径口径【方案B】：物理 μm（C++ r_scale=1.0，直径=2r，阈值=5μm）")
     else:
         click.echo("口径: legacy 各向同性（×2/×4）")
     click.echo(f"执行: {' '.join(cmd)}")
