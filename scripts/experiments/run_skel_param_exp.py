@@ -71,6 +71,7 @@ def main():
 
     results = []
     for samp in args.samples:
+        sample_results = []  # 本样本独立结果（per-sample 落盘，避免并行作业互相覆盖）
         seg_tif = os.path.join(SEG_DIR, samp + '_csam_seg.tiff')
         if not os.path.exists(seg_tif):
             cand = [f for f in os.listdir(SEG_DIR) if samp in f and f.endswith('.tiff')]
@@ -109,8 +110,8 @@ def main():
             elapsed = time.time() - t0
             if rc.returncode != 0 or not os.path.exists(pajek_out):
                 print(f'  [FAILED] rc={rc.returncode}: {rc.stderr[-300:]}')
-                results.append({'sample': samp, 'config': tag, 'elapsed_s': elapsed,
-                                'status': 'failed', 'stderr': rc.stderr[-300:]})
+                sample_results.append({'sample': samp, 'config': tag, 'elapsed_s': elapsed,
+                                       'status': 'failed', 'stderr': rc.stderr[-300:]})
                 continue
             pc, pe, pmap = parse_pajek(pajek_out)
             health = skeleton_health(pc, pe, pmap)
@@ -119,14 +120,21 @@ def main():
                    'grid_size': grid_size, 'elapsed_s': round(elapsed, 1), 'status': 'ok',
                    'health': health, 'matching': match,
                    'spacing': spacing, 'delta_um': DELTA_UM}
-            results.append(rec)
+            sample_results.append(rec)
             print(f"  耗时 {elapsed:.0f}s | grid={grid_size} 节点 {health['n_nodes']} | "
                   f"comp={match['completeness']:.3f} corr={match['correctness']:.3f} "
                   f"qual={match['quality']:.3f} | defects={health['total_defects']}", flush=True)
 
-    json.dump(results, open(os.path.join(args.out_dir, 'skel_param_results.json'), 'w'),
-              indent=2, ensure_ascii=False)
-    print(f'\n完成 {len(results)} 条 → {args.out_dir}/skel_param_results.json')
+        # per-sample 落盘：sdir 按样本唯一，并行作业绝不互相覆盖（修复 v20260628_1156）
+        json.dump(sample_results, open(os.path.join(sdir, 'result.json'), 'w'),
+                  indent=2, ensure_ascii=False)
+        results.extend(sample_results)
+
+    # 合并文件按作业唯一命名，避免 4 并行作业写同名文件互相覆盖
+    job_id = os.environ.get('SLURM_JOB_ID', 'local')
+    combined = os.path.join(args.out_dir, f'skel_param_results_{job_id}.json')
+    json.dump(results, open(combined, 'w'), indent=2, ensure_ascii=False)
+    print(f'\n完成 {len(results)} 条 → {combined}（per-sample 见各 <sample>/result.json）')
 
 
 if __name__ == '__main__':
