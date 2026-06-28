@@ -48,6 +48,9 @@ RESUME=false
 FILES_FROM=""
 SLURM_SCRIPT="scripts/pipeline.slurm"
 PARTITION="compute"
+ANISOTROPIC=""
+PHYSICAL_RADIUS=""
+SPEED="0.05"
 HAS_SKELETON=false
 MIN_SKELETONS=0
 MAX_SKELETONS=-1
@@ -84,6 +87,12 @@ while [[ $# -gt 0 ]]; do
             HAS_SKELETON=true; shift ;;
         --partition)
             PARTITION="$2"; shift 2 ;;
+        --anisotropic)
+            ANISOTROPIC="--anisotropic"; shift ;;
+        --physical-radius)
+            PHYSICAL_RADIUS="--physical-radius"; shift ;;
+        --speed)
+            SPEED="$2"; shift 2 ;;
         *)
             echo "Unknown option: $1"
             echo "用法: bash scripts/batch_launch.sh --volume <mm^3> [选项]"
@@ -104,6 +113,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --count-skeletons       仅统计各样本已有 .pajek 数，不提交"
             echo "  --has-skeleton          仅提交已有 ≥1 个骨架的样本（用于 --phases stats）"
             echo "  --partition <name>     Slurm 分区（默认 compute，可选 tao/control/gpu）"
+            echo "  --anisotropic          启用各向异性 spacing 物理单位口径（传给 pipeline）"
+            echo "  --physical-radius      启用方案B 各向异性 EDT（半径直接出物理 μm，隐含 --anisotropic）"
+            echo "  --speed <float>        收缩速度 speed_param（默认 0.05；大样本可用 0.2 加速）"
             echo "  --dry                   仅预览，不提交"
             echo ""
             echo "--files-from 文件格式:"
@@ -129,6 +141,9 @@ echo "  Volume     : $VOLUME mm^3"
 echo "  Sampling   : $SAMPLING"
 echo "  Partition   : $PARTITION"
 echo "  Phases       : $PHASES"
+echo "  Anisotropic  : $ANISOTROPIC"
+echo "  Phys Radius  : $PHYSICAL_RADIUS"
+echo "  Speed        : $SPEED"
 echo "  Resume       : $RESUME"
 echo "  Has Skeleton : $HAS_SKELETON"
 echo "  Min Skeletons: $MIN_SKELETONS"
@@ -359,13 +374,14 @@ print(compute_sample_key('$REL_PATH'))
     SHORT_NAME="$(echo "$SAMPLE_KEY" | rev | cut -d'/' -f1 | rev | cut -c1-16)"
 
     # 提交作业
-    # 参数: INPUT_FILE, VOLUME, OUTPUT_STEM, SAMPLING, PHASES
+    # 参数: INPUT_FILE, VOLUME, OUTPUT_STEM, SAMPLING, PHASES, ANISOTROPIC, SPEED, PHYSICAL_RADIUS
     JOB_ID=$(sbatch \
         --partition="$PARTITION" \
         --job-name="vs_${SHORT_NAME}" \
         --output="logs/pipeline_${SHORT_NAME}_%j.out" \
         --error="logs/pipeline_${SHORT_NAME}_%j.err" \
         "$SLURM_SCRIPT" "$REL_PATH" "$VOLUME" "skeleton" "$SAMPLING" "$PHASES" \
+        "$ANISOTROPIC" "$SPEED" "$PHYSICAL_RADIUS" \
         2>&1 | grep -oP '\d+')
 
     if [ -n "$JOB_ID" ]; then
@@ -391,6 +407,9 @@ echo "=========================================="
     echo "Volume: $VOLUME"
     echo "Sampling: $SAMPLING"
     echo "Phases: $PHASES"
+    echo "Anisotropic: $ANISOTROPIC"
+    echo "PhysicalRadius: $PHYSICAL_RADIUS"
+    echo "Speed: $SPEED"
     echo "Resume: $RESUME"
     echo "MinSkeletons: $MIN_SKELETONS"
     echo "MaxSkeletons: $MAX_SKELETONS"

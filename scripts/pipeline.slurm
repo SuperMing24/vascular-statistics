@@ -119,20 +119,23 @@ DATA_ROOT="/share/home/sukm/datasets/VascStats"
 OUTPUT_ROOT="/share/home/sukm/experiments/vs_vascstats"
 
 # --- 作业参数 ---
-# 用法：sbatch scripts/pipeline.slurm <input> <volume> [output_stem] [sampling] [phases]
-#   input       — 输入文件（相对于 DATA_ROOT，或绝对路径）
-#   volume      — 组织体积 mm^3（仅 phases=all/stats 时使用）
-#   output_stem — 输出文件前缀（默认 "skeleton"）
-#   sampling    — 稀疏采样率 (1.0=最密, 2.0=快速, 默认 1.0)
-#   phases      — 执行阶段: all | skeletonize | stats（默认 all）
-#   anisotropic — 启用各向异性 spacing（默认空=legacy, "--anisotropic" 启用）
+# 用法：sbatch scripts/pipeline.slurm <input> <volume> [output_stem] [sampling] [phases] [anisotropic] [speed] [physical_radius]
+#   input           — 输入文件（相对于 DATA_ROOT，或绝对路径）
+#   volume          — 组织体积 mm^3（仅 phases=all/stats 时使用）
+#   output_stem     — 输出文件前缀（默认 "skeleton"）
+#   sampling        — 稀疏采样率 (1.0=最密, 2.0=快速, 默认 1.0)
+#   phases          — 执行阶段: all | skeletonize | stats（默认 all）
+#   anisotropic     — 启用各向异性 spacing（默认空=legacy, "--anisotropic" 启用）
+#   speed           — 收缩速度 speed_param（默认 0.05，大样本可 0.2 加速）
+#   physical_radius — 启用方案B 各向异性 EDT（默认空=legacy, "--physical-radius" 启用）
 INPUT_FILE="${1:?缺少输入文件参数}"
 VOLUME="${2:-}"
 OUTPUT_STEM="${3:-skeleton}"
 SAMPLING="${4:-1.0}"
 PHASES="${5:-all}"
-ANISOTROPIC="${6:-}"  # 传 "--anisotropic" 启用
-SPEED="${7:-0.05}"    # 收缩速度 speed_param（默认 0.05，大样本可 0.2 加速）
+ANISOTROPIC="${6:-}"       # 传 "--anisotropic" 启用
+SPEED="${7:-0.05}"         # 收缩速度 speed_param（默认 0.05，大样本可 0.2 加速）
+PHYSICAL_RADIUS="${8:-}"   # 传 "--physical-radius" 启用方案B 各向异性 EDT
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
@@ -153,6 +156,9 @@ echo "  Input      : $INPUT_FILE"
 echo "  Volume     : $VOLUME mm^3"
 echo "  Sampling   : $SAMPLING"
 echo "  Phases     : $PHASES"
+echo "  Anisotropic: $ANISOTROPIC"
+echo "  Phys Radius: $PHYSICAL_RADIUS"
+echo "  Speed      : $SPEED"
 echo "  Data Root  : $DATA_ROOT"
 echo "  Output Root: $OUTPUT_ROOT"
 echo "========================================"
@@ -365,6 +371,9 @@ fi
 if [ "$ANISOTROPIC" = "--anisotropic" ]; then
     PIPE_CMD+=(--anisotropic)
 fi
+if [ "$PHYSICAL_RADIUS" = "--physical-radius" ]; then
+    PIPE_CMD+=(--physical-radius)
+fi
 PIPE_CMD+=(--speed "$SPEED")
 
 echo "Command: ${PIPE_CMD[*]}"
@@ -466,7 +475,9 @@ meta = {
 
 # 口径标记（轨道 B）：各向异性模式下记录 spacing 供 micro/aggregate 识别
 anisotropic = '$ANISOTROPIC' == '--anisotropic'
+physical_radius = '$PHYSICAL_RADIUS' == '--physical-radius'
 meta['stats_unit_mode'] = 'anisotropic' if anisotropic else 'legacy'
+meta['radius_mode'] = 'physical' if physical_radius else 'legacy'
 
 if anisotropic:
     sample_meta_path = os.path.join(
