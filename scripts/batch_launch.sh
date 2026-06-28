@@ -380,6 +380,7 @@ print(compute_sample_key('$REL_PATH'))
         --job-name="vs_${SHORT_NAME}" \
         --output="logs/pipeline_${SHORT_NAME}_%j.out" \
         --error="logs/pipeline_${SHORT_NAME}_%j.err" \
+        --export="ALL,DATA_ROOT=$DATA_ROOT,OUTPUT_ROOT=$OUTPUT_ROOT" \
         "$SLURM_SCRIPT" "$REL_PATH" "$VOLUME" "skeleton" "$SAMPLING" "$PHASES" \
         "$ANISOTROPIC" "$SPEED" "$PHYSICAL_RADIUS" \
         2>&1 | grep -oP '\d+')

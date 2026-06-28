@@ -113,10 +113,10 @@ set -euo pipefail
 # ║  第二部分：用户可调参数                                                   ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
-# --- 路径配置 ---
-PROJECT_DIR="/share/home/sukm/vascular-statistics"
-DATA_ROOT="/share/home/sukm/datasets/VascStats"
-OUTPUT_ROOT="/share/home/sukm/experiments/vs_vascstats"
+# --- 路径配置（可通过 sbatch --export 或环境变量覆盖）---
+PROJECT_DIR="${PROJECT_DIR:-/share/home/sukm/vascular-statistics}"
+DATA_ROOT="${DATA_ROOT:-/share/home/sukm/datasets/VascStats}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-/share/home/sukm/experiments/vs_vascstats}"
 
 # --- 作业参数 ---
 # 用法：sbatch scripts/pipeline.slurm <input> <volume> [output_stem] [sampling] [phases] [anisotropic] [speed] [physical_radius]
