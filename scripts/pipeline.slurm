@@ -451,35 +451,41 @@ if [ "$PHASES" != "stats" ]; then
     fi
 fi
 
-# --- 写入 run_meta.json（单次运行的完整元数据，stats 阶段不单独记录） ---
+# --- 写入 run_meta.json（合并 CLI 已写的管道参数 + slurm 作业元数据）---
 if [ "$PHASES" != "stats" ]; then
-# 口径标记：slurm 脚本负责写入 run_meta.json，从 sample_metadata.json 读取 spacing
 python -c "
 import json, os
 
-meta = {
-    'run_id': '$RUN_ID',
-    'sample_key': '$SAMPLE_DIR',
-    'input_path': '$REL_INPUT',
-    'input_format': '${REL_INPUT##*.}',
-    'sampling': $SAMPLING,
-    'phases': '$PHASES',
-    'job_id': '$SLURM_JOB_ID',
-    'slurm_node': '$SLURM_NODELIST',
-    'start_time': '$START_TIME',
-    'end_time': '$END_TIME',
-    'exit_code': $EXIT_CODE,
-    'status': '$FINAL_STATUS',
-    'commit': '$COMMIT_HASH',
-}
+meta_path = os.path.join('$JOB_OUTDIR', 'run_meta.json')
 
-# 口径标记（轨道 B）：各向异性模式下记录 spacing 供 micro/aggregate 识别
+# 1. 读取 CLI pipeline 已写的 run_meta.json（含 grid_shape / effective_spacing_um 等管道参数）
+if os.path.exists(meta_path):
+    with open(meta_path) as f:
+        meta = json.load(f)
+else:
+    meta = {}
+
+# 2. 合并 slurm 作业级字段
+meta['run_id'] = '$RUN_ID'
+meta['sample_key'] = '$SAMPLE_DIR'
+meta['job_id'] = '$SLURM_JOB_ID'
+meta['slurm_node'] = '$SLURM_NODELIST'
+meta['start_time'] = '$START_TIME'
+meta['end_time'] = '$END_TIME'
+meta['exit_code'] = $EXIT_CODE
+meta['status'] = '$FINAL_STATUS'
+meta['commit'] = '$COMMIT_HASH'
+meta['input_path'] = meta.get('input_path', '$REL_INPUT')
+
+# 3. 口径标记（slurm 视角的确证——确保即便 CLI 未写也不丢失）
 anisotropic = '$ANISOTROPIC' == '--anisotropic'
 physical_radius = '$PHYSICAL_RADIUS' == '--physical-radius'
-meta['stats_unit_mode'] = 'anisotropic' if anisotropic else 'legacy'
-meta['radius_mode'] = 'physical' if physical_radius else 'legacy'
+if 'radius_mode' not in meta:
+    meta['radius_mode'] = 'physical' if physical_radius else 'legacy'
+if 'stats_unit_mode' not in meta:
+    meta['stats_unit_mode'] = 'anisotropic' if anisotropic else 'legacy'
 
-if anisotropic:
+if anisotropic and 'stats_spacing_um' not in meta:
     sample_meta_path = os.path.join(
         '$OUTPUT_ROOT', '$SAMPLE_DIR', 'sample_metadata.json')
     if os.path.exists(sample_meta_path):
@@ -487,14 +493,11 @@ if anisotropic:
             sm = json.load(f)
         spacing = sm.get('spatial', {}).get('voxel_spacing_um')
         if spacing and len(spacing) == 3:
-            sx, sy, sz = float(spacing[0]), float(spacing[1]), float(spacing[2])
-            meta['spacing_um'] = [sx, sy, sz]
-            meta['r_scale'] = (sx + sy) / 2.0
+            meta['stats_spacing_um'] = [float(v) for v in spacing]
 
-path = os.path.join('$JOB_OUTDIR', 'run_meta.json')
-with open(path, 'w') as f:
+with open(meta_path, 'w') as f:
     json.dump(meta, f, indent=2, ensure_ascii=False)
-print(f'  [meta] {path}')
+print(f'  [meta] {meta_path}')
 "
 fi   # end of "if phases != stats" for run_meta.json
 

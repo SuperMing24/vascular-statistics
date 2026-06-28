@@ -349,6 +349,7 @@ def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic, p
     # ═════════════════════════════════════════════════════════════
     # 阶段 1：骨架化（skeletonize / all）
     # ═════════════════════════════════════════════════════════════
+    _grid_shape = _eff_sp = None  # 供结尾 run_meta.json 使用
     if phases in ("skeletonize", "all"):
         click.echo("=== 阶段 1/3: 骨架化 ===")
         if input.endswith(".mat"):
@@ -362,30 +363,31 @@ def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic, p
             raise click.Abort()
 
         voxel_count = int((stack > 0).sum())
+        _grid_shape = list(stack.shape)
         click.echo(f"已加载分割: {stack.shape}, 前景体素数: {voxel_count}")
 
         # 方案 A：按骨架化实际网格写有效 spacing 旁车（半径 μm 转换随网格联动）
-        eff_sp = _write_run_spacing_sidecar(output_stem, list(stack.shape))
-        if eff_sp is not None:
+        _eff_sp = _write_run_spacing_sidecar(output_stem, list(stack.shape))
+        if _eff_sp is not None:
             click.echo(
-                f"有效 spacing（网格 {list(stack.shape)} → FOV/grid）: {eff_sp} μm/体素 "
+                f"有效 spacing（网格 {list(stack.shape)} → FOV/grid）: {_eff_sp} μm/体素 "
                 f"→ {_run_spacing_path(output_stem)}"
             )
 
         # 方案 B：可选——骨架化用各向异性 EDT，半径直接出物理 μm
         _gg_restore = None  # (模块, 原 DistMap3D)，用于 finally 还原
         if physical_radius:
-            if eff_sp is None:
+            if _eff_sp is None:
                 click.echo("--physical-radius 须有 sample_metadata.json（含 voxel_spacing_um + shape）。",
                            err=True)
                 raise click.Abort()
             import importlib as _il
             _gg_mod = _il.import_module("VascGraph.Skeletonize.GenerateGraph")
             _gg_restore = (_gg_mod, _gg_mod.DistMap3D)
-            _gg_mod.DistMap3D = _make_anisotropic_distmap(eff_sp)
+            _gg_mod.DistMap3D = _make_anisotropic_distmap(_eff_sp)
             with open(output_stem + "_radius_unit.txt", "w", encoding="utf-8") as f:
                 f.write("um\n")  # 溯源标记：本 .pajek 的 r 为物理 μm（方案B）
-            click.echo(f"半径口径【方案B】：物理 μm（各向异性 EDT sampling≈{eff_sp}）—— pajek 中 r 为 μm")
+            click.echo(f"半径口径【方案B】：物理 μm（各向异性 EDT sampling≈{_eff_sp}）—— pajek 中 r 为 μm")
 
         sk = Skeleton(label=stack, sampling=sampling,
                       speed_param=speed, dist_param=0.5, med_param=0.5)
@@ -488,6 +490,34 @@ def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic, p
         raise click.Abort()
 
     click.echo(f"管线完成。汇总文件: statistics_summary_d10+um.txt")
+
+    # ── 写入运行元数据（每次运行的完整参数记录）──
+    import json as _json
+    from datetime import datetime as _dt
+    run_id = "run_" + _dt.now().strftime("%Y%m%d_%H%M%S")
+    run_meta = {
+        "run_id": run_id,
+        "input_path": os.path.abspath(input),
+        "output_stem": output_stem,
+        "sampling": sampling,
+        "speed": speed,
+        "phases": phases,
+        "volume_mm3": volume,
+        "radius_mode": "physical" if physical_radius else "legacy",
+        "stats_unit_mode": "anisotropic" if (anisotropic or physical_radius) else "legacy",
+    }
+    if _grid_shape is not None:
+        run_meta["grid_shape"] = _grid_shape
+    if _eff_sp is not None:
+        run_meta["effective_spacing_um"] = _eff_sp
+    if anisotropic or physical_radius:
+        _s = _resolve_spacing(output_stem)
+        if _s is not None:
+            run_meta["stats_spacing_um"] = _s
+    meta_path = "run_meta.json"
+    with open(meta_path, "w", encoding="utf-8") as f:
+        _json.dump(run_meta, f, indent=2, ensure_ascii=False)
+    click.echo(f"运行元数据: {meta_path}")
 
 
 @main.command()
