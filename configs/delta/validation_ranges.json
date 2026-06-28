@@ -1,0 +1,19 @@
+{
+  "_comment": "管线验证生理范围 —— 鼠脑血管文献综合参考值。可拓展多物种。",
+
+  "mouse_brain": {
+    "_ref": "docs/mouse_brain_vascular_physiology_reference_20260619.md",
+    "diameter_um": {"min": 5, "max": 50, "_note": "皮质毛细血管~2-6μm，微动脉~10-30μm，pial artery~30-80μm"},
+    "segment_length_um": {"min": 10, "max": 200, "_note": "微血管段间分支间距，典型20-80μm"},
+    "tortuosity": {"min": 1.0, "max": 1.5, "_note": "弧长/弦长，正常血管≤1.3，病理性可达1.5+"},
+    "segment_density_per_mm3": {"min": 0, "max": 10000, "_note": "段数/组织体积(mm³)"},
+    "segment_count_min": 1,
+
+    "_warnings": {
+      "diameter_low": "≤5μm 可能为方案B采样下限伪影或节点漂移贴壁",
+      "diameter_high": ">50μm 可能为大动脉或分割假阳性连通",
+      "tortuosity_high": ">1.3 提示血管过度弯曲，可能为骨架追踪错误或病理性改变",
+      "density_zero": "段密度=0 表示体积为0或统计阶段失败"
+    }
+  }
+}

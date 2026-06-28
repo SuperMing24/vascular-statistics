@@ -808,7 +808,9 @@ def extract_metadata_cmd(data_root, output_root, voxel_spacing_config,
               help="输出根目录（含样本子目录）")
 @click.option("--sample-key", default=None,
               help="仅处理指定样本（缺省则全部）")
-def aggregate_stats_cmd(output_root, sample_key):
+@click.option("--force", is_flag=True, default=False,
+              help="强制聚合：即使跨 run 口径不一致也继续")
+def aggregate_stats_cmd(output_root, sample_key, force):
     """汇总同一样本多次骨架化运行的形态学统计。
 
     遍历每个样本目录下所有 run_*/statistics_summary_d10+um.txt，
@@ -822,7 +824,7 @@ def aggregate_stats_cmd(output_root, sample_key):
     from vascular_statistics.aggregate_stats import run_aggregation
 
     sample_keys = [sample_key] if sample_key else None
-    result = run_aggregation(output_root, sample_keys=sample_keys)
+    result = run_aggregation(output_root, sample_keys=sample_keys, force=force)
 
     click.echo()
     click.echo(f"已处理: {result['processed']}, "
@@ -880,7 +882,9 @@ def micro_stats_cmd(output_root, sample_key):
               help="输出根目录（含样本子目录）")
 @click.option("--sample-key", default=None,
               help="仅处理指定样本（缺省则全部）")
-def aggregate_diameter_stats_cmd(output_root, sample_key):
+@click.option("--force", is_flag=True, default=False,
+              help="强制聚合：即使跨 run 口径不一致也继续")
+def aggregate_diameter_stats_cmd(output_root, sample_key, force):
     """汇总同一样本多次骨架化运行的子范围（0-10 um）统计。
 
     遍历每个样本目录下所有 run_*/statistics_summary_d0-10um.txt，
@@ -894,7 +898,7 @@ def aggregate_diameter_stats_cmd(output_root, sample_key):
     from vascular_statistics.aggregate_stats import run_aggregation
 
     sample_keys = [sample_key] if sample_key else None
-    result = run_aggregation(output_root, sample_keys=sample_keys, suffix=DIAMETER_SUFFIX)
+    result = run_aggregation(output_root, sample_keys=sample_keys, suffix=DIAMETER_SUFFIX, force=force)
 
     click.echo()
     click.echo(f"已处理: {result['processed']}, "
@@ -983,6 +987,123 @@ def resize_tiff_cmd(input, xy, scale, z, binary, order, output):
         resize_tiff(input, out, target_xy=xy, scale=scale, target_z=z, order=_order)
     except (ValueError, OSError) as e:
         click.echo(f"错误: {e}", err=True)
+        raise click.Abort()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 管线验证命令（五维检查体系：S/Se/C/Cs/N）
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@main.group("validate")
+def validate_group():
+    """管线验证命令组 —— 五维检查体系（结构/语义/完整性/一致性/数值）。"""
+    pass
+
+
+@validate_group.command("run")
+@click.argument("run_dir", type=click.Path(exists=True))
+@click.option("--species", default="mouse_brain", help="物种（对应 validation_ranges.json key）")
+@click.option("--json-output", "-j", is_flag=True, help="JSON 格式输出")
+def validate_run_cmd(run_dir, species, json_output):
+    """验证单个 run 目录：结构 + 语义 + 数值。"""
+    from vascular_statistics.pipeline_validator import validate_run
+
+    result = validate_run(run_dir, species)
+    if json_output:
+        import json as _json
+        click.echo(_json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        for name, check in result["checks"].items():
+            status = "✅" if check["passed"] else "❌"
+            click.echo(f"  {status} {name}: {check['message']}")
+        click.echo(f"\n{'✅ 全部通过' if result['all_passed'] else '❌ 存在问题'}")
+    if not result["all_passed"]:
+        raise click.Abort()
+
+
+@validate_group.command("sample")
+@click.argument("sample_dir", type=click.Path(exists=True))
+@click.option("--species", default="mouse_brain", help="物种")
+@click.option("--json-output", "-j", is_flag=True, help="JSON 格式输出")
+def validate_sample_cmd(sample_dir, species, json_output):
+    """验证单个样本目录：所有 run + 跨运行一致性。"""
+    from vascular_statistics.pipeline_validator import validate_sample
+
+    result = validate_sample(sample_dir, species)
+    if json_output:
+        import json as _json
+        click.echo(_json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        for name, check in result["checks"].items():
+            if name == "runs":
+                status = "✅" if check["passed"] else "❌"
+                click.echo(f"  {status} {name}: {check['message']}")
+            else:
+                status = "✅" if check["passed"] else "❌"
+                click.echo(f"  {status} {name}: {check['message']}")
+        click.echo(f"\n{'✅ 全部通过' if result['all_passed'] else '❌ 存在问题'}")
+    if not result["all_passed"]:
+        raise click.Abort()
+
+
+@validate_group.command("batch")
+@click.argument("exp_root", type=click.Path(exists=True))
+@click.option("--species", default="mouse_brain", help="物种")
+@click.option("--output", "-o", default=None, help="输出 JSON 报告路径")
+def validate_batch_cmd(exp_root, species, output):
+    """全量 batch 验证：遍历所有样本 + 完整性 + manifest 状态。"""
+    import json as _json
+    from vascular_statistics.pipeline_validator import validate_batch
+
+    result = validate_batch(exp_root, species)
+    s = result["summary"]
+    click.echo(f"样本: {s['total_samples']}  total")
+    click.echo(f"通过: {s['passed']}  ✅")
+    click.echo(f"问题: {s['failed']}  ❌")
+
+    if result.get("checks", {}).get("completeness"):
+        c = result["checks"]["completeness"]
+        status = "✅" if c["passed"] else "❌"
+        click.echo(f"\n完整性: {status} {c['message']}")
+
+    if output:
+        with open(output, "w", encoding="utf-8") as f:
+            _json.dump(result, f, indent=2, ensure_ascii=False)
+        click.echo(f"\n报告已写入: {output}")
+
+    if not result["all_passed"]:
+        raise click.Abort()
+
+
+@validate_group.command("presubmit")
+@click.argument("seg_root", type=click.Path(exists=True))
+@click.argument("exp_root", type=click.Path(exists=True))
+@click.option("--json-output", "-j", is_flag=True, help="JSON 格式输出")
+def validate_presubmit_cmd(seg_root, exp_root, json_output):
+    """提交前检查：seg 目录结构 + metadata 覆盖对齐。"""
+    from vascular_statistics.pipeline_validator import validate_presubmit
+
+    passed, msg, details = validate_presubmit(seg_root, exp_root)
+    if json_output:
+        import json as _json
+        click.echo(_json.dumps({"passed": passed, "message": msg, "details": details},
+                               indent=2, ensure_ascii=False))
+    else:
+        click.echo(f"seg .tiff: {details.get('seg_count', '?')}")
+        click.echo(f"metadata:  {details.get('meta_count', '?')}")
+        only_meta = details.get("only_in_metadata", [])
+        only_seg = details.get("only_in_seg", [])
+        if only_meta:
+            click.echo(f"⚠ 仅 metadata 无 seg: {len(only_meta)} 个")
+        if only_seg:
+            click.echo(f"⚠ 仅 seg 无 metadata: {len(only_seg)} 个")
+        dup = details.get("structural", {}).get("details", {}).get("duplicated", 0)
+        if dup:
+            click.echo(f"❌ 重复层级: {dup} 处")
+        status = "✅ 提交前检查通过" if passed else "❌ 存在问题"
+        click.echo(f"\n{status}")
+    if not passed:
         raise click.Abort()
 
 

@@ -501,6 +501,13 @@ print(f'  [meta] {meta_path}')
 "
 fi   # end of "if phases != stats" for run_meta.json
 
+# --- 非阻塞验证钩子（仅 warning，不 kill 作业）---
+if [ "$PHASES" != "stats" ] && [ "$EXIT_CODE" -eq 0 ]; then
+    echo ""
+    echo "--- Post-run validation ---"
+    python -m vascular_statistics.cli validate run "$JOB_OUTDIR" 2>&1 | sed 's/^/  [validate] /' || true
+fi
+
 # --- 列出输出产物 ---
 if [ "$PHASES" != "stats" ] && [ -d "$JOB_OUTDIR" ]; then
     echo ""

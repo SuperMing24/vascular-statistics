@@ -104,6 +104,7 @@ def parse_run_statistics(run_dir: str, suffix: str = SUFFIX_D10_PLUS) -> Optiona
 def aggregate_sample_stats(
     sample_dir: str,
     suffix: str = SUFFIX_D10_PLUS,
+    force: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """跨所有 run_* 目录聚合统计数据。
 
@@ -148,11 +149,16 @@ def aggregate_sample_stats(
             except (json.JSONDecodeError, OSError):
                 pass
     if len(set(calibers)) > 1:
-        import warnings
-        warnings.warn(
-            f"口径混用: {sample_dir} 中同时存在 legacy 与 anisotropic 的 run，"
-            f"聚合结果的均值口径不一致，建议重跑为新口径后替换。"
+        msg = (
+            f"口径混用: {sample_dir} 中同时存在 legacy 与 anisotropic 的 run "
+            f"(modes={set(calibers)})，聚合均值±标准差物理无意义。"
+            f"请统一口径后重跑，或使用 --force 强制聚合。"
         )
+        if force:
+            import warnings
+            warnings.warn(f"FORCED: {msg}")
+        else:
+            raise ValueError(msg)
 
     # 样本元数据（来自 sample_metadata.json）
     sample_meta: Dict[str, Any] = {}
@@ -377,6 +383,7 @@ def format_aggregate_stats(agg: Dict[str, Any], suffix: str = "") -> str:
 def write_aggregate_stats(
     sample_dir: str,
     suffix: str = SUFFIX_D10_PLUS,
+    force: bool = False,
 ) -> Optional[str]:
     """汇总样本统计并写入 statistics_summary{suffix}.txt。
 
@@ -387,7 +394,7 @@ def write_aggregate_stats(
     返回：
         写入的文件路径，若无有效数据返回 None。
     """
-    agg = aggregate_sample_stats(sample_dir, suffix=suffix)
+    agg = aggregate_sample_stats(sample_dir, suffix=suffix, force=force)
     if agg is None:
         return None
 
@@ -406,6 +413,7 @@ def run_aggregation(
     output_root: str,
     sample_keys: Optional[List[str]] = None,
     suffix: str = SUFFIX_D10_PLUS,
+    force: bool = False,
 ) -> dict:
     """对所有样本（或指定样本）运行统计聚合。
 
@@ -454,7 +462,7 @@ def run_aggregation(
     for sk in sorted(sample_keys):
         sample_dir = os.path.join(output_root, sk)
         try:
-            result = write_aggregate_stats(sample_dir, suffix=suffix)
+            result = write_aggregate_stats(sample_dir, suffix=suffix, force=force)
             if result:
                 processed += 1
                 print(f"  [{processed}] {sk}")
