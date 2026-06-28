@@ -58,27 +58,35 @@ def _run_spacing_path(stem: str) -> str:
 
 def _effective_spacing_from_grid(
     native_spacing: list[float],
-    native_shape: list[int],
-    current_shape: list[int],
+    native_shape_dhw: list[int],
+    current_shape_dhw: list[int],
 ) -> list[float]:
     """由骨架化实际网格反推有效体素 spacing（μm/体素）。
 
     effective_spacing[轴] = native_spacing[轴] × native_size[轴] / current_size[轴]。
 
-    轴序对齐（关键，易错）：spacing 是 [x, y, z]，shape 是 [D, H, W] = [z, y, x]：
-        x ↔ W = shape[2]，y ↔ H = shape[1]，z ↔ D = shape[0]。
+    ⚠️ 轴序约定（两个 shape 都必须是 [D, H, W] = [z, y, x]）：
+        spacing 是 [x, y, z]；x ↔ W=shape[2]，y ↔ H=shape[1]，z ↔ D=shape[0]。
+    调用方负责把不同来源的 shape 统一到 [D,H,W]（见 _write_run_spacing_sidecar）。
     无重采样（current==native）时返回 native_spacing 本身。
     """
     axis_to_dim = (2, 1, 0)  # spacing 索引 [x,y,z] → shape 维度 [W,H,D]
     eff: list[float] = []
     for sp_idx, dim in enumerate(axis_to_dim):
-        ratio = native_shape[dim] / current_shape[dim]
+        ratio = native_shape_dhw[dim] / current_shape_dhw[dim]
         eff.append(round(float(native_spacing[sp_idx]) * ratio, 6))
     return eff
 
 
-def _write_run_spacing_sidecar(stem: str, current_shape: list[int]) -> list[float] | None:
-    """骨架化阶段调用：算出本运行有效 spacing 并写旁车，返回该 spacing（无 metadata 则 None）。"""
+def _write_run_spacing_sidecar(stem: str, current_shape_dhw: list[int]) -> list[float] | None:
+    """骨架化阶段调用：算出本运行有效 spacing 并写旁车，返回该 spacing（无 metadata 则 None）。
+
+    ⚠️ 轴序对齐（260628_2019 修复）：metadata 的 stack_properties.shape 来自 .mat，
+    为 **[H, W, D]**（切片 D 在末轴，见 extract_metadata.load_mat_metadata）；而骨架化
+    输入 current_shape 来自 seg .tif，为 **[D, H, W]**（segment 经 transpose(2,0,1) 写出，
+    见 segmentation/_pipeline.py）。两者轴序不同——必须先把 native_shape [H,W,D]→[D,H,W]
+    再比，否则即使不 resize 也会把 Z 维错配到 XY，effective spacing 全错。
+    """
     meta = _read_sample_meta_upwards()
     if meta is None:
         return None
@@ -86,7 +94,15 @@ def _write_run_spacing_sidecar(stem: str, current_shape: list[int]) -> list[floa
     native_shape = meta.get("stack_properties", {}).get("shape")
     if not native_sp or not native_shape or len(native_sp) != 3 or len(native_shape) != 3:
         return None
-    eff = _effective_spacing_from_grid(native_sp, native_shape, list(current_shape))
+    # metadata [H,W,D] → [D,H,W]，对齐 current（tif）轴序
+    native_dhw = [native_shape[2], native_shape[0], native_shape[1]]
+    cur = list(current_shape_dhw)
+    # 安全护栏：无 resize 时两者应为同一多重集；否则提示（真实 XY resize 也会触发，仅信息）
+    if sorted(native_dhw) != sorted(cur):
+        click.echo(
+            f"[spacing] 提示：native {native_dhw} 与骨架化网格 {cur}(均 [D,H,W]) 维度集不同——"
+            f"若为有意 XY 重采样属正常；否则请核对轴序/数据。", err=True)
+    eff = _effective_spacing_from_grid(native_sp, native_dhw, cur)
     with open(_run_spacing_path(stem), "w", encoding="utf-8") as f:
         f.write(",".join(str(v) for v in eff) + "\n")
     return eff

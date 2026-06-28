@@ -133,7 +133,9 @@ def load_mat_metadata(mat_path: str) -> Dict[str, Any]:
     if stack is None:
         raise ValueError(f"未在 {mat_path} 中找到 3D ndarray (stack)")
 
-    shape = tuple(int(s) for s in stack.shape)  # (D, H, W)
+    # 注意：.mat stack 原序为 [H, W, D]（面内两轴 + 末轴切片数 Z），非 [D,H,W]。
+    # 下游若需对齐 seg .tif 的 [D,H,W] 轴序，须自行转换（见 cli._write_run_spacing_sidecar）。
+    shape = tuple(int(s) for s in stack.shape)  # [H, W, D]（D=切片数，在末轴）
     foreground = int((stack > 0).sum())
     total_voxels = int(np.prod(shape))
     grayscale_sum = float(stack.sum())
