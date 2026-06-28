@@ -462,9 +462,9 @@ def validate_presubmit(
     details["only_in_seg"] = sorted(only_seg)
 
     if only_meta:
-        issues.append(f"C1 {len(only_meta)} 样本有 metadata 无 seg .tiff: {only_meta[:5]}...")
+        issues.append(f"C1 {len(only_meta)} 样本有 metadata 无 seg .tiff: {sorted(only_meta)[:5]}...")
     if only_seg:
-        issues.append(f"C1 {len(only_seg)} 样本有 seg .tiff 无 metadata: {only_seg[:5]}...")
+        issues.append(f"C1 {len(only_seg)} 样本有 seg .tiff 无 metadata: {sorted(only_seg)[:5]}...")
 
     details["meta_count"] = len(meta_samples)
     details["seg_count"] = len(seg_samples)
