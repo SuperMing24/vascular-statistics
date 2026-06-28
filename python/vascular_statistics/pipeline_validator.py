@@ -445,7 +445,7 @@ def validate_presubmit(
     for root, _dirs, files in os.walk(exp_root):
         for f in files:
             if f == "sample_metadata.json":
-                rel = os.path.relpath(os.path.dirname(root), exp_root)
+                rel = os.path.relpath(root, exp_root)  # root 即 sample_metadata.json 所在目录
                 meta_samples.add(rel)
 
     seg_samples: set[str] = set()
