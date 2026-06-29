@@ -136,8 +136,12 @@ def run(
     print("=== 阶段 2/3: 格式转换 ===")
     edges_path = output_stem + "_edges.txt"
     vertices_path = output_stem + "_vertices.txt"
-    pajek_to_cpp_input(pajek_path, edges_path, vertices_path)
-    print(f"  {edges_path}, {vertices_path}")
+    # 坐标轴序修正：.tif（imread → [D,H,W]=[z,y,x]）骨架化时 pos=[z,y,x]，须重排为
+    # 物理 [x,y,z]，否则各向异性下 C++ 把深度 z 配 sx、宽度 x 配 sz（x↔z spacing 错配）。
+    # 详见 docs/skeleton_axis_order_bug_20260629.md。.mat 入口保持默认 xyz。
+    _axis_order = "zyx" if input_path.lower().endswith((".tif", ".tiff")) else "xyz"
+    pajek_to_cpp_input(pajek_path, edges_path, vertices_path, axis_order=_axis_order)
+    print(f"  {edges_path}, {vertices_path}（坐标轴序 {_axis_order}→xyz）")
 
     # ═══════════════════════════════════════════════════════════
     # 阶段 3：C++ 统计（stats / all）

@@ -81,6 +81,7 @@ def pajek_to_cpp_input(
     pajek_path: str,
     edges_out: Optional[str] = None,
     vertices_out: Optional[str] = None,
+    axis_order: str = "xyz",
 ) -> Tuple[str, str]:
     """将 Pajek 图文件转换为 C++ 统计代码所需的平面格式。
 
@@ -88,11 +89,26 @@ def pajek_to_cpp_input(
         pajek_path: 输入 Pajek .net 文件路径。
         edges_out: 输出边文件路径（默认：<stem>_edges.txt）。
         vertices_out: 输出节点文件路径（默认：<stem>_vertices.txt）。
+        axis_order: pajek 节点 pos 三列的**物理轴含义**，即 pos[0]/pos[1]/pos[2]
+            分别是哪个物理轴。必须是 "xyz" 的某个排列。
+            下游 C++ 固定按 [x,y,z] 列解释 vertices 并施加 spacing [sx,sy,sz]，
+            故本函数据此把 pos 重排为物理 [x,y,z] 顺序写出，消除轴错配。
+              - "xyz"（默认，向后兼容）：pos 已是 [x,y,z]，原样写。
+              - "zyx"：pos 为数组序 [D,H,W]=[z,y,x]（pipeline 从 [D,H,W] 的 .tif
+                骨架化时 VascGraph 直接以数组轴索引赋 pos 的情形），写出时
+                重排为 [x,y,z]（取 pos[2],pos[1],pos[0]），使深度 z 配 sz、宽度 x 配 sx。
+              - "yxz"：pos 为 [y,x,z]（standalone skeletonize 转 [H,W,D] 的情形）。
+            **半径列不受影响**：r 是逐体素标量，与坐标轴标注解耦。
 
     Returns:
         (edges_path, vertices_path) — 两个输出文件的路径。
     """
     import os
+
+    order = axis_order.lower()
+    if sorted(order) != ["x", "y", "z"]:
+        raise ValueError(f"axis_order 必须是 'xyz' 的某个排列，得到: {axis_order!r}")
+    ix, iy, iz = order.index("x"), order.index("y"), order.index("z")
 
     stem = os.path.splitext(pajek_path)[0]
     if edges_out is None:
@@ -103,12 +119,12 @@ def pajek_to_cpp_input(
     g = nx.read_pajek(pajek_path)
     attrs = _extract_node_attrs(g)
 
-    # 写入节点文件：每行 idx type x y z radius
+    # 写入节点文件：每行 idx type x y z radius（pos 按 axis_order 重排为物理 [x,y,z]）
     with open(vertices_out, "w", encoding="utf-8") as f:
         for nid in sorted(attrs.keys()):
             a = attrs[nid]
-            f.write(f"{nid + 1} {a['type']} {a['pos'][0]:.6f} {a['pos'][1]:.6f} "
-                    f"{a['pos'][2]:.6f} {a['r']:.6f}\n")
+            f.write(f"{nid + 1} {a['type']} {a['pos'][ix]:.6f} {a['pos'][iy]:.6f} "
+                    f"{a['pos'][iz]:.6f} {a['r']:.6f}\n")
 
     # 写入边文件：每行 n1 n2
     with open(edges_out, "w", encoding="utf-8") as f:

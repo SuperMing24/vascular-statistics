@@ -183,7 +183,13 @@ def main():
     "--output-dir", "-o", default=".",
     help="输出目录（默认当前目录）",
 )
-def convert(pajek, output_dir):
+@click.option(
+    "--axis-order", default="xyz", type=click.Choice(["xyz", "zyx", "yxz"]),
+    help="pajek 节点 pos 三列的物理轴含义（pos[0..2] 各是哪个物理轴）。"
+         "pipeline 从 .tif([D,H,W]) 骨架化的 skeleton.pajek 应传 'zyx' 以修正 x↔z spacing 错配；"
+         "默认 'xyz' 即原样不重排。详见 docs/skeleton_axis_order_bug_*.md。",
+)
+def convert(pajek, output_dir, axis_order):
     """将 Pajek 图转换为 C++ 统计代码所需的平面格式。
 
     PAJEK: VascGraph 输出的 .pajek / .net 文件。
@@ -194,7 +200,7 @@ def convert(pajek, output_dir):
     edges_out = os.path.join(output_dir, stem + "_edges.txt")
     vertices_out = os.path.join(output_dir, stem + "_vertices.txt")
 
-    e_path, v_path = pajek_to_cpp_input(pajek, edges_out, vertices_out)
+    e_path, v_path = pajek_to_cpp_input(pajek, edges_out, vertices_out, axis_order=axis_order)
     click.echo(f"边文件:   {e_path}")
     click.echo(f"节点文件: {v_path}")
 
@@ -425,8 +431,14 @@ def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic, p
 
     edges_path = output_stem + "_edges.txt"
     vertices_path = output_stem + "_vertices.txt"
-    pajek_to_cpp_input(pajek_path, edges_path, vertices_path)
-    click.echo(f"已生成: {edges_path}, {vertices_path}")
+    # 坐标轴序修正：pipeline 从 .tif（imread → [D,H,W]=[z,y,x]）骨架化时，VascGraph
+    # 直接以数组轴索引赋节点 pos，故 pos=[z,y,x]。下游 C++ 按 [x,y,z] 解释列并施加
+    # spacing [sx,sy,sz]，若不重排会把深度 z 配成 sx、宽度 x 配成 sz（x↔z spacing 错配，
+    # 各向异性下长度/弯曲度偏）。.tif 入口统一传 axis_order="zyx" 重排为物理 [x,y,z]。
+    # .mat 入口（ReadStackMat → [H,W,D]=[y,x,z]）保持默认 xyz（仅 x↔y 残留，sx≈sy 可忽略）。
+    _axis_order = "zyx" if input.lower().endswith((".tif", ".tiff")) else "xyz"
+    pajek_to_cpp_input(pajek_path, edges_path, vertices_path, axis_order=_axis_order)
+    click.echo(f"已生成: {edges_path}, {vertices_path}（坐标轴序 {_axis_order}→xyz）")
 
     # ═════════════════════════════════════════════════════════════
     # 阶段 3：C++ 统计（stats / all）
