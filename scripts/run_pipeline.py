@@ -44,7 +44,7 @@ def run(
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     sys.path.insert(0, os.path.join(project_root, "python"))
 
-    from vascular_statistics.bridge import pajek_to_cpp_input
+    from vascular_statistics.bridge import pajek_to_cpp_input, canonicalize_graph_pos
     from vascular_statistics.vascgraph import GraphIO, Skeletonize
     from VascGraph.Tools.CalcTools import fixG
     ReadStackMat = GraphIO.ReadStackMat
@@ -104,6 +104,11 @@ def run(
         sk.Update()
         graph = fixG(sk.GetOutput())
 
+        # 坐标轴序规范化：本脚本 .tif 转 [H,W,D]、.mat 也 [H,W,D]，故 pos 恒为 "yxz"，
+        # 重排为物理 [x,y,z] 使 .pajek 规范（GUI/stats/金标准对比 全对）。半径不受影响。
+        # 详见 docs/skeleton_axis_order_bug_20260629.md。
+        canonicalize_graph_pos(graph, "yxz")
+
         # 切换到输出目录写入产物
         os.chdir(actual_output_dir)
 
@@ -136,12 +141,9 @@ def run(
     print("=== 阶段 2/3: 格式转换 ===")
     edges_path = output_stem + "_edges.txt"
     vertices_path = output_stem + "_vertices.txt"
-    # 坐标轴序修正：.tif（imread → [D,H,W]=[z,y,x]）骨架化时 pos=[z,y,x]，须重排为
-    # 物理 [x,y,z]，否则各向异性下 C++ 把深度 z 配 sx、宽度 x 配 sz（x↔z spacing 错配）。
-    # 详见 docs/skeleton_axis_order_bug_20260629.md。.mat 入口保持默认 xyz。
-    _axis_order = "zyx" if input_path.lower().endswith((".tif", ".tiff")) else "xyz"
-    pajek_to_cpp_input(pajek_path, edges_path, vertices_path, axis_order=_axis_order)
-    print(f"  {edges_path}, {vertices_path}（坐标轴序 {_axis_order}→xyz）")
+    # .pajek 的 pos 已在骨架化阶段规范化为物理 [x,y,z]，故用 bridge 默认 axis_order="xyz"。
+    pajek_to_cpp_input(pajek_path, edges_path, vertices_path)
+    print(f"  {edges_path}, {vertices_path}")
 
     # ═══════════════════════════════════════════════════════════
     # 阶段 3：C++ 统计（stats / all）

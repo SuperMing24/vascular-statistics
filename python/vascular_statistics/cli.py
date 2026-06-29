@@ -343,7 +343,7 @@ def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic, p
         --phases stats        跳过骨架化，从已有 skeleton.pajek 开始
         --phases all          全流程（默认）
     """
-    from vascular_statistics.bridge import pajek_to_cpp_input
+    from vascular_statistics.bridge import pajek_to_cpp_input, canonicalize_graph_pos
     from vascular_statistics.vascgraph import GraphIO, Skeletonize, Tools
     ReadStackMat = GraphIO.ReadStackMat
     WritePajek = GraphIO.WritePajek
@@ -404,6 +404,14 @@ def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic, p
                 _gg_restore[0].DistMap3D = _gg_restore[1]  # 还原上游 DistMap3D
         graph = Tools.CalcTools.fixG(sk.GetOutput())
 
+        # 坐标轴序规范化：骨架化（含半径赋值）后、写出前，把节点 pos 重排为物理 [x,y,z]，
+        # 使 .pajek 规范——GUI（逐列读 x,y,z）+ C++ stats + 金标准对比 全部正确。
+        # pipeline 不转置：.tif→[D,H,W]=pos"zyx"；.mat（ReadStackMat→[H,W,D]）=pos"yxz"。
+        # 半径已按体素索引烘焙进 node['r']，交换坐标不影响半径。
+        # 详见 docs/skeleton_axis_order_bug_20260629.md。
+        _pos_axes = "zyx" if input.lower().endswith((".tif", ".tiff")) else "yxz"
+        canonicalize_graph_pos(graph, _pos_axes)
+
         pajek_path = output_stem + ".pajek"
         WritePajek(path="", name=pajek_path, graph=graph)
         click.echo(f"骨架图已保存: {pajek_path}")
@@ -431,14 +439,10 @@ def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic, p
 
     edges_path = output_stem + "_edges.txt"
     vertices_path = output_stem + "_vertices.txt"
-    # 坐标轴序修正：pipeline 从 .tif（imread → [D,H,W]=[z,y,x]）骨架化时，VascGraph
-    # 直接以数组轴索引赋节点 pos，故 pos=[z,y,x]。下游 C++ 按 [x,y,z] 解释列并施加
-    # spacing [sx,sy,sz]，若不重排会把深度 z 配成 sx、宽度 x 配成 sz（x↔z spacing 错配，
-    # 各向异性下长度/弯曲度偏）。.tif 入口统一传 axis_order="zyx" 重排为物理 [x,y,z]。
-    # .mat 入口（ReadStackMat → [H,W,D]=[y,x,z]）保持默认 xyz（仅 x↔y 残留，sx≈sy 可忽略）。
-    _axis_order = "zyx" if input.lower().endswith((".tif", ".tiff")) else "xyz"
-    pajek_to_cpp_input(pajek_path, edges_path, vertices_path, axis_order=_axis_order)
-    click.echo(f"已生成: {edges_path}, {vertices_path}（坐标轴序 {_axis_order}→xyz）")
+    # .pajek 的 pos 已在骨架化阶段规范化为物理 [x,y,z]（canonicalize_graph_pos），
+    # 故此处用 bridge 默认 axis_order="xyz" 即可，无需再重排。
+    pajek_to_cpp_input(pajek_path, edges_path, vertices_path)
+    click.echo(f"已生成: {edges_path}, {vertices_path}")
 
     # ═════════════════════════════════════════════════════════════
     # 阶段 3：C++ 统计（stats / all）

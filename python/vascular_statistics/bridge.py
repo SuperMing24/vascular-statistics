@@ -19,6 +19,37 @@ from typing import Dict, Optional, Tuple
 import networkx as nx
 
 
+def canonicalize_graph_pos(graph, pos_axes: str) -> None:
+    """把 VascGraph 骨架图节点 pos 从「骨架化数组轴序」重排为规范物理 [x,y,z]（in-place）。
+
+    VascGraph 以数组轴索引赋节点 pos，故 pos 的轴序 = 喂给 Skeleton 的数组轴序：
+      - cli.pipeline .tif（imread，不转置 → [D,H,W]）→ pos_axes="zyx"
+      - cli.pipeline .mat（ReadStackMat → [H,W,D]）→ pos_axes="yxz"
+      - run_pipeline.py（.tif 转 [H,W,D]、.mat [H,W,D]）→ pos_axes="yxz"
+    本函数把 pos 重排为物理 [x,y,z]（pos_axes 中 'x'/'y'/'z' 各自所在的 slot）。
+
+    半径已在 __AssignDistMapToGraph 按体素索引烘焙进 node['r']，交换坐标**不影响半径**。
+    使写出的 .pajek 规范：GUI（ReadPajek 逐列读 x,y,z）、C++ bridge（默认 xyz）、
+    与金标准对比 全部自然正确，无需任何消费端补偿。
+
+    pos_axes 须是 "xyz" 的某个排列；="xyz" 时为恒等（不动）。
+    须在骨架化（含半径赋值）完成后、WritePajek 之前调用。
+    详见 docs/skeleton_axis_order_bug_20260629.md。
+    """
+    import numpy as np
+
+    order = pos_axes.lower()
+    if sorted(order) != ["x", "y", "z"]:
+        raise ValueError(f"pos_axes 必须是 'xyz' 的某个排列，得到: {pos_axes!r}")
+    ix, iy, iz = order.index("x"), order.index("y"), order.index("z")
+    if (ix, iy, iz) == (0, 1, 2):
+        return  # 已是 [x,y,z]，恒等
+
+    for n in graph.GetNodes():
+        p = graph.node[n]["pos"]
+        graph.node[n]["pos"] = np.array([p[ix], p[iy], p[iz]])
+
+
 def _parse_pos(pos_str: str) -> Tuple[float, float, float]:
     """解析 Pajek pos 属性字符串 '"[x y z]"' → (x, y, z)。"""
     # 去掉引号和方括号

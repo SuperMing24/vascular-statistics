@@ -64,15 +64,12 @@ def restats_run(run_dir: str, volume_mm3: float, spacing_um: list[float],
     vertices_path = stem + "_vertices.txt"
 
     # --- 格式转换 ---
-    # 坐标轴序修正：本工具处理的 skeleton.pajek 均产自 cluster pipeline 从 seg .tif
-    # （imread → [D,H,W]=[z,y,x]）的骨架化，pos=[z,y,x]，须重排为物理 [x,y,z]，否则
-    # 各向异性下 C++ 把深度 z 配 sx、宽度 x 配 sz（x↔z spacing 错配，长度/弯曲度偏）。
-    # 详见 docs/skeleton_axis_order_bug_20260629.md。
-    # （注：本脚本与 scripts/experiments/rerun_stats_axis_fix_20260629.py 功能重叠，
-    #  后者额外支持方案B 物理半径口径 + d0-10um 子范围清理，新批次优先用后者。）
+    # 假设 skeleton.pajek 的 pos 已是规范物理 [x,y,z]（骨架化阶段 canonicalize_graph_pos
+    # 已规范化；2026-06-29 之前产出的旧 pajek 为数组轴序，须先经 build_axisfix_experiment
+    # 规范化后再用本工具）。详见 docs/skeleton_axis_order_bug_20260629.md。
     sys.path.insert(0, os.path.join(PROJECT_DIR, "python"))
     from vascular_statistics.bridge import pajek_to_cpp_input
-    pajek_to_cpp_input(pajek_path, edges_path, vertices_path, axis_order="zyx")
+    pajek_to_cpp_input(pajek_path, edges_path, vertices_path)
 
     # --- C++ 统计（各向异性） ---
     r_scale = (spacing_um[0] + spacing_um[1]) / 2.0
