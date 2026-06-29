@@ -131,23 +131,59 @@ def resolve_spacing(run_dir: str, meta: dict) -> list[float] | None:
     return None
 
 
+def resolve_volume(run_dir: str, meta: dict) -> float | None:
+    """volume：run_meta.volume_mm3 优先；否则向上找 sample_metadata.json（兼容
+    run_meta.json 功能（86448bb）之前产出的旧 run）。"""
+    if meta.get("volume_mm3") is not None:
+        return float(meta["volume_mm3"])
+    d = run_dir
+    for _ in range(4):
+        d = os.path.dirname(d)
+        smp = os.path.join(d, "sample_metadata.json")
+        if os.path.exists(smp):
+            with open(smp, "r", encoding="utf-8") as f:
+                sm = json.load(f)
+            v = sm.get("spatial", {}).get("tissue_volume_mm3")
+            if v is not None:
+                return float(v)
+    return None
+
+
+def infer_radius_mode(run_dir: str, meta: dict) -> str:
+    """radius_mode：run_meta 优先；否则看 skeleton_radius_unit.txt（=um → physical）。"""
+    if meta.get("radius_mode"):
+        return meta["radius_mode"]
+    ru = os.path.join(run_dir, "skeleton_radius_unit.txt")
+    if os.path.exists(ru):
+        with open(ru, "r", encoding="utf-8") as f:
+            if f.read().strip().lower() == "um":
+                return "physical"
+    return "legacy"
+
+
 def reprocess_run(run_dir: str, exe: str, pos_axes: str, dry: bool) -> str:
     pajek = os.path.join(run_dir, "skeleton.pajek")
     if not os.path.exists(pajek):
         return "skip-no-pajek"
     meta_path = os.path.join(run_dir, "run_meta.json")
-    if not os.path.exists(meta_path):
-        return "skip-no-meta"
-    with open(meta_path, "r", encoding="utf-8") as f:
-        meta = json.load(f)
+    meta: dict = {}
+    if os.path.exists(meta_path):
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
 
-    unit_mode = meta.get("stats_unit_mode", "legacy")
-    radius_mode = meta.get("radius_mode", "legacy")
-    volume = meta.get("volume_mm3")
+    # 幂等护栏：已修过（run_meta 含 axis_fix_history）→ 跳过，避免二次交换 pajek 把它还原回错的
+    if meta.get("axis_fix_history"):
+        return "skip-already-fixed"
+
+    volume = resolve_volume(run_dir, meta)
     if volume is None:
         return "skip-no-volume"
     spacing = resolve_spacing(run_dir, meta)
-    aniso = unit_mode == "anisotropic" or radius_mode == "physical"
+    radius_mode = infer_radius_mode(run_dir, meta)
+    unit_mode = meta.get("stats_unit_mode")
+    # 各向异性判定：meta 标记 / 物理半径 / 有 sidecar spacing（兼容无 meta 旧 run）
+    aniso = (unit_mode == "anisotropic") or (radius_mode == "physical") or \
+            (unit_mode is None and spacing is not None)
     if aniso and spacing is None:
         return "skip-no-spacing"
 
@@ -155,7 +191,7 @@ def reprocess_run(run_dir: str, exe: str, pos_axes: str, dry: bool) -> str:
 
     if dry:
         print(f"    [dry] swap pajek pos ({pos_axes}→xyz)；删除 stale；重跑 stats "
-              f"(aniso={aniso}, physical={radius_mode=='physical'})")
+              f"(aniso={aniso}, physical={radius_mode=='physical'}, vol={volume})")
         return "done"
 
     # 1) pajek pos 重排为规范 [x,y,z]（覆写副本里的 skeleton.pajek）
@@ -180,7 +216,13 @@ def reprocess_run(run_dir: str, exe: str, pos_axes: str, dry: bool) -> str:
         print(f"    [ERR] C++ rc={r.returncode}: {r.stderr.strip()[:300]}")
         return "skip-cpp-fail"
 
-    # 4) run_meta 留痕
+    # 4) run_meta 留痕（无 meta 的旧 run 补全基本字段，使 axis_fix_history 落到有效 run_meta）
+    meta.setdefault("output_stem", stem)
+    meta.setdefault("volume_mm3", volume)
+    meta.setdefault("radius_mode", radius_mode)
+    meta.setdefault("stats_unit_mode", "anisotropic" if aniso else "legacy")
+    if spacing is not None:
+        meta.setdefault("stats_spacing_um", spacing)
     meta.setdefault("axis_fix_history", []).append({
         "fix": f"pajek pos canonicalized {pos_axes}->xyz ({n} 顶点); stats re-run",
         "spacing_um": spacing,
