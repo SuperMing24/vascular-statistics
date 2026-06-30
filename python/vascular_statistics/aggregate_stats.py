@@ -21,24 +21,23 @@ from typing import Any, Dict, List, Optional, Tuple
 SUFFIX_D10_PLUS = "_d10+um"
 
 
-def parse_run_statistics(run_dir: str, suffix: str = SUFFIX_D10_PLUS) -> Optional[Dict[str, Any]]:
+def parse_run_statistics(run_dir: str, suffix: str = "") -> Optional[Dict[str, Any]]:
     """解析单个 run_* 目录中的统计数据。
 
     参数：
         run_dir: run_YYYYMMDD_HHMMSS 目录路径。
-        suffix: 统计文件后缀（默认 _d10+um = >=10um 有效段, _d0-10um = 0-10um 子范围）。
+        suffix: 统计文件后缀（默认 "" = 全量；_d10+um = >=10um, _d0-10um = 0-10um 子范围）。
 
     返回：
         dict 含 4 项指标 + 段数 + 运行元数据，若目录无统计文件则返回 None。
     """
     stats_path = os.path.join(run_dir, f"statistics_summary{suffix}.txt")
-    # 向后兼容：新文件名不存在时回退到旧名（无后缀）
-    if not os.path.exists(stats_path) and suffix == SUFFIX_D10_PLUS:
-        stats_path = os.path.join(run_dir, "statistics_summary.txt")
     meta_path = os.path.join(run_dir, "run_meta.json")
-    vessel_path = os.path.join(run_dir, f"generate_vessel{SUFFIX_D10_PLUS}.txt")
-    if not os.path.exists(vessel_path):
-        vessel_path = os.path.join(run_dir, "generate_vessel.txt")  # 向后兼容
+    # 段数明细：优先与 suffix 对应文件；全量(suffix="")回退旧 _d10+um 名
+    # （存量 run 的 generate_vessel_d10+um.txt 内容本就是全量）。
+    vessel_path = os.path.join(run_dir, f"generate_vessel{suffix}.txt")
+    if not os.path.exists(vessel_path) and suffix == "":
+        vessel_path = os.path.join(run_dir, f"generate_vessel{SUFFIX_D10_PLUS}.txt")
 
     if not os.path.exists(stats_path):
         return None
@@ -103,14 +102,14 @@ def parse_run_statistics(run_dir: str, suffix: str = SUFFIX_D10_PLUS) -> Optiona
 
 def aggregate_sample_stats(
     sample_dir: str,
-    suffix: str = SUFFIX_D10_PLUS,
+    suffix: str = "",
     force: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """跨所有 run_* 目录聚合统计数据。
 
     参数：
         sample_dir: 样本目录路径（含 run_* 子目录）。
-        suffix: 统计文件后缀（"" = 主统计, "_d0-10um" = 0-10um 子范围）。
+        suffix: 统计文件后缀（"" = 全量, "_d0-10um"/"_d10+um" = 子范围）。
 
     返回：
         聚合 dict，含 runs 列表 + 均值/标准差 + 样本元数据，
@@ -243,8 +242,10 @@ def format_aggregate_stats(agg: Dict[str, Any], suffix: str = "") -> str:
     lines: List[str] = []
     sep = "=" * 78
 
-    is_subrange = suffix == "_d0-10um"
-    stat_label = "子范围统计汇总（直径 0-10 um）" if is_subrange else "样本统计汇总"
+    _suffix_labels = {"_d0-10um": "直径 0-10 um", "_d10+um": "直径 >=10 um"}
+    is_subrange = suffix != ""
+    sub_label = _suffix_labels.get(suffix, suffix)
+    stat_label = f"子范围统计汇总（{sub_label}）" if is_subrange else "样本统计汇总（全量）"
 
     lines.append(sep)
     lines.append(f"  Vascular_Statistics — {stat_label}")
@@ -350,12 +351,12 @@ def format_aggregate_stats(agg: Dict[str, Any], suffix: str = "") -> str:
         elif is_subrange:
             lines.append(
                 "注：段密度 = 子范围段数 / 组织体积。"
-                "仅统计直径 0-10 um 且节点数 >= 3 的血管段。"
+                f"仅统计 {sub_label} 且节点数 >= 3 的血管段。"
             )
         else:
             lines.append(
-                "注：段密度 = 有效段数 / 组织体积。"
-                "直径 0-10 um 的血管段不计入。"
+                "注：段密度 = 全量段数 / 组织体积。"
+                "纳入所有完成遍历的血管段（无直径/节点数/P99 过滤）。"
             )
         lines.append("")
 
@@ -382,14 +383,14 @@ def format_aggregate_stats(agg: Dict[str, Any], suffix: str = "") -> str:
 
 def write_aggregate_stats(
     sample_dir: str,
-    suffix: str = SUFFIX_D10_PLUS,
+    suffix: str = "",
     force: bool = False,
 ) -> Optional[str]:
     """汇总样本统计并写入 statistics_summary{suffix}.txt。
 
     参数：
         sample_dir: 样本目录路径（同一级目录下的 run_* 将被扫描）。
-        suffix: 统计文件后缀（"" = 主统计, "_d0-10um" = 0-10um 子范围）。
+        suffix: 统计文件后缀（"" = 全量, "_d0-10um"/"_d10+um" = 子范围）。
 
     返回：
         写入的文件路径，若无有效数据返回 None。
@@ -412,7 +413,7 @@ def write_aggregate_stats(
 def run_aggregation(
     output_root: str,
     sample_keys: Optional[List[str]] = None,
-    suffix: str = SUFFIX_D10_PLUS,
+    suffix: str = "",
     force: bool = False,
 ) -> dict:
     """对所有样本（或指定样本）运行统计聚合。
@@ -420,7 +421,7 @@ def run_aggregation(
     参数：
         output_root: 输出根目录。
         sample_keys: 指定样本键列表。None = 全部。
-        suffix: 统计文件后缀（"" = 主统计, "_d0-10um" = 0-10um 子范围）。
+        suffix: 统计文件后缀（"" = 全量, "_d0-10um"/"_d10+um" = 子范围）。
 
     返回：
         {"processed": N, "skipped": N, "failed": N}

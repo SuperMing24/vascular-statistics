@@ -2,13 +2,13 @@
 子范围统计模块 —— 从已有骨架化运行结果中按直径范围提取血管段统计。
 
 背景：
-  C++ 引擎输出的 statistics_summary_d10+um.txt 仅统计直径 >= 10 um 的有效段，
-  但 generate_vessel_radius_d10+um.txt / generate_vessel_path_length_d10+um.txt /
-  generate_vessel_tortuosity_d10+um.txt 中保留了全部血管段的明细数据。
-  本模块从这些明细文件中按直径范围过滤（默认 0-10 um），
-  生成独立的子范围统计文件，不覆盖原有输出。
+  C++ 引擎输出全量统计 statistics_summary.txt + 全量段明细
+  generate_vessel{,_radius,_path_length,_tortuosity}.txt（无任何过滤）。
+  本模块从全量明细中按直径范围 + 节点数 >= 3 + P99 过滤，生成独立的
+  子范围统计文件（如 0-10 um、>=10 um），不覆盖全量输出。
+  （存量 run 的明细仍叫 _d10+um，内容同为全量，parse_segment_data 自动回退兼容。）
 
-输出后缀: _d0-10um（直径 0-10 um）。旧名 _micro 已弃用。
+输出后缀: _d0-10um（直径 0-10 um）/ _d10+um（直径 >=10 um）。旧名 _micro 已弃用。
 
 阈值依据（legacy 口径）：
   C++ data_io.cpp 中 if (avg_temp >= 2.5) 对应直径 >= 10 um
@@ -28,16 +28,17 @@ import json
 import math
 import os
 import statistics
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 
 # ============================================================================
-# 子范围常量（默认 0-10 um）
+# 子范围常量与预设
 # ============================================================================
 
 # 文件后缀与输出标签
 DIAMETER_SUFFIX = "_d0-10um"        # 0-10 um 子范围文件后缀
-SUFFIX_D10_PLUS = "_d10+um"          # >=10 um 有效段子范围文件后缀
+SUFFIX_D10_PLUS = "_d10+um"          # >=10 um 子范围文件后缀（旧默认 C++ 输出同名）
 DIAMETER_LABEL = "直径 0-10 um"     # 用于汇总/跨样本报告标题
 DIAMETER_LO_UM = 0.0                # 直径下界 (um)
 DIAMETER_HI_UM = 10.0               # 直径上界 (um)
@@ -45,6 +46,24 @@ DIAMETER_HI_UM = 10.0               # 直径上界 (um)
 # Legacy 口径常量（轨道 B 各向异性下由 _read_caliber 动态覆盖）
 LEGACY_RADIUS_THRESHOLD = 2.5       # 半径 < 2.5 体素 (= 直径 < 10um，旧 x4)
 LEGACY_MIN_NODES = 3                # 与 C++ 一致：k > 2 即至少 3 个节点
+
+
+@dataclass(frozen=True)
+class SubRange:
+    """一个直径子范围档位 [lo_um, hi_um)：后缀 + 标题 + 直径上下界。
+
+    全量统计由 C++ 引擎产出（无后缀）；子范围（如 0-10um、>=10um）由本模块
+    从全量明细中按直径范围 + 节点数 >= 3 + P99 过滤派生。
+    """
+    suffix: str
+    label: str
+    lo_um: float
+    hi_um: float
+
+
+# 两个预设档位
+SUBRANGE_D0_10 = SubRange(DIAMETER_SUFFIX, DIAMETER_LABEL, DIAMETER_LO_UM, DIAMETER_HI_UM)
+SUBRANGE_D10_PLUS = SubRange(SUFFIX_D10_PLUS, "直径 >=10 um", 10.0, float("inf"))
 
 # 离群段标记（与 C++ data_io.cpp 一致，轨道 A）。
 MAD_K = 3.5  # Iglewicz-Hoaglin 修正 z 分数阈值（相对判据，单位无关）
@@ -69,13 +88,13 @@ def _mad_outlier_count(values: List[float], k: float = MAD_K) -> int:
 
 def parse_segment_data(run_dir: str) -> Optional[Dict[str, Any]]:
     """读取单个 run_* 目录中的全部血管段明细数据。
-    优先新名 (_d10+um)，回退旧名（向后兼容）。
+    优先无后缀全量明细（新 C++ 输出），回退旧 _d10+um 名（存量 run，内容同为全量）。
     """
     def _resolve(name: str) -> str:
-        new_path = os.path.join(run_dir, f"{name}{SUFFIX_D10_PLUS}.txt")
-        if os.path.exists(new_path):
-            return new_path
-        return os.path.join(run_dir, f"{name}.txt")
+        full_path = os.path.join(run_dir, f"{name}.txt")
+        if os.path.exists(full_path):
+            return full_path
+        return os.path.join(run_dir, f"{name}{SUFFIX_D10_PLUS}.txt")
 
     radius_path = _resolve("generate_vessel_radius")
     length_path = _resolve("generate_vessel_path_length")
@@ -149,7 +168,18 @@ def _read_caliber(run_dir: str) -> Tuple[str, float, float, float, float]:
                 meta = json.load(f)
             if meta.get("stats_unit_mode") == "anisotropic":
                 mode = "anisotropic"
-                r_scale = float(meta.get("r_scale", 2.0))
+                # 与 C++ data_io.cpp 口径一致地推导 r_scale（run_meta 不写 r_scale）：
+                #   radius_mode=physical → 1.0（半径已是物理 μm，方案B）
+                #   否则各向异性 → (sx+sy)/2（取自 stats_spacing_um）
+                #   缺 spacing 时退回 meta.r_scale 或 2.0（保守）
+                if meta.get("radius_mode") == "physical":
+                    r_scale = 1.0
+                else:
+                    sp = meta.get("stats_spacing_um")
+                    if sp and len(sp) >= 2:
+                        r_scale = (float(sp[0]) + float(sp[1])) / 2.0
+                    else:
+                        r_scale = float(meta.get("r_scale", 2.0))
         except (json.JSONDecodeError, OSError, ValueError, KeyError):
             pass
 
@@ -166,18 +196,20 @@ def _read_caliber(run_dir: str) -> Tuple[str, float, float, float, float]:
 def compute_subrange_stats(
     run_dir: str,
     volume: float,
+    subrange: SubRange = SUBRANGE_D0_10,
 ) -> Optional[Dict[str, Any]]:
-    """从 per-run 段数据中计算子范围（默认 0-10 um）统计。
+    """从 per-run 全量段明细中计算指定直径子范围统计。
 
     参数：
         run_dir: run_* 目录路径。
         volume: 组织体积 mm^3。
+        subrange: 直径档位 [lo_um, hi_um)（默认 0-10 um）。
 
     返回：
         dict 含子范围指标 + 段数 + 过滤后的段明细，
         若无段数据或符合条件的段数为 0 则返回 None。
     """
-    mode, r_scale, length_um, radius_thresh, abs_thresh = _read_caliber(run_dir)
+    mode, r_scale, length_um, _radius_thresh, abs_thresh = _read_caliber(run_dir)
 
     seg_data = parse_segment_data(run_dir)
     if seg_data is None:
@@ -188,11 +220,15 @@ def compute_subrange_stats(
     tortuosities = seg_data["tortuosities"]
     node_sequences = seg_data["node_sequences"]
 
-    # 过滤：半径 < 阈值 且节点数 >= 3
+    # 直径范围 [lo_um, hi_um) → 半径范围 [lo_r, hi_r)（直径 = 半径 * 2 * r_scale）。
+    lo_r = subrange.lo_um / (2.0 * r_scale)
+    hi_r = subrange.hi_um / (2.0 * r_scale)  # hi_um=inf → hi_r=inf
+
+    # 过滤：半径落在 [lo_r, hi_r) 且节点数 >= 3
     sub_indices: List[int] = []
     for i, r in enumerate(radii):
         n_nodes = len(node_sequences[i].split()) if node_sequences[i] else 0
-        if r < radius_thresh and n_nodes >= LEGACY_MIN_NODES:
+        if lo_r <= r < hi_r and n_nodes >= LEGACY_MIN_NODES:
             sub_indices.append(i)
 
     if not sub_indices:
@@ -285,20 +321,24 @@ def compute_subrange_stats(
 def write_subrange_stats(
     run_dir: str,
     volume: float,
+    subrange: SubRange = SUBRANGE_D0_10,
 ) -> Optional[str]:
     """计算并写入 per-run 子范围统计文件。
 
-    在 run_dir 中生成 5 个 _d0-10um 后缀的文件，不覆盖原有文件。
+    在 run_dir 中生成 5 个 {subrange.suffix} 后缀的文件，不覆盖全量明细。
 
-    返回：写入的 statistics_summary_d0-10um.txt 路径，无符合条件的段则返回 None。
+    返回：写入的 statistics_summary{suffix}.txt 路径，无符合条件的段则返回 None。
     """
-    stats = compute_subrange_stats(run_dir, volume)
+    stats = compute_subrange_stats(run_dir, volume, subrange)
     if stats is None:
         return None
 
+    suffix = subrange.suffix
+    label = subrange.label
+
     # --- 写入过滤后的段明细 ---
     def _write_lines(key: str, data: List[Any]) -> str:
-        path = os.path.join(run_dir, f"generate_vessel_{key}{DIAMETER_SUFFIX}.txt")
+        path = os.path.join(run_dir, f"generate_vessel_{key}{suffix}.txt")
         with open(path, "w", encoding="utf-8") as f:
             for item in data:
                 f.write(f"{item}\n")
@@ -308,13 +348,13 @@ def write_subrange_stats(
     _write_lines("path_length", stats["sub_lengths"])
     _write_lines("tortuosity", stats["sub_torts"])
 
-    node_path = os.path.join(run_dir, f"generate_vessel{DIAMETER_SUFFIX}.txt")
+    node_path = os.path.join(run_dir, f"generate_vessel{suffix}.txt")
     with open(node_path, "w", encoding="utf-8") as f:
         for seq in stats["node_sequences_sub"]:
             f.write(f"{seq}\n")
 
     # --- 写入统计汇总 ---
-    summary_path = os.path.join(run_dir, f"statistics_summary{DIAMETER_SUFFIX}.txt")
+    summary_path = os.path.join(run_dir, f"statistics_summary{suffix}.txt")
     n_sub = stats["n_segments_subrange"]
     n_total = stats["n_segments_total"]
 
@@ -337,7 +377,7 @@ def write_subrange_stats(
     abs_thresh = 1200.0 if mode == "anisotropic" else 600.0
 
     lines = [
-        f"Vascular_Statistics -- 单次运行子范围统计（{DIAMETER_LABEL}）",
+        f"Vascular_Statistics -- 单次运行子范围统计（{label}）",
         "",
         f"平均直径 (um): {stats['avg_diameter_um']:.6f}",
         f"中位直径 (um): {stats['median_diameter_um']:.6f}",
@@ -359,7 +399,7 @@ def write_subrange_stats(
         f"{stats['abs_outliers']} ({stats['abs_ratio']:.4f}%)",
         warn_note,
         "",
-        f"注：统计值基于 P99 排除后的 {n_sub} 个子范围段（{DIAMETER_LABEL}，"
+        f"注：统计值基于 P99 排除后的 {n_sub} 个子范围段（{label}，"
         f"节点数 >= 3）；"
         f"P99 排除顶 1% 极端长尾，排除的段写入明细文件但不参与统计；"
         f"单位口径 {unit_note}。",
@@ -381,10 +421,11 @@ def write_subrange_stats(
 def run_subrange_stats(
     output_root: str,
     sample_keys: Optional[List[str]] = None,
+    subrange: SubRange = SUBRANGE_D0_10,
 ) -> dict:
-    """对所有已完成骨架化的样本生成子范围统计。
+    """对所有已完成骨架化的样本生成指定档位的子范围统计。
 
-    幂等：已有 statistics_summary_d0-10um.txt 的 run 将跳过。
+    幂等：已有 statistics_summary{subrange.suffix}.txt 的 run 将跳过。
     """
     if sample_keys is None:
         sample_keys = _scan_completed_samples(output_root)
@@ -415,20 +456,20 @@ def run_subrange_stats(
         for run_name in run_dirs:
             run_dir = os.path.join(sample_dir, run_name)
 
-            # 检查 C++ 主统计是否已运行（新名 _d10+um，向后兼容旧名）
-            main_stats = os.path.join(run_dir, f"statistics_summary{SUFFIX_D10_PLUS}.txt")
+            # 检查 C++ 主统计是否已运行（全量无后缀，向后兼容旧 _d10+um 名）
+            main_stats = os.path.join(run_dir, "statistics_summary.txt")
             if not os.path.exists(main_stats):
-                main_stats = os.path.join(run_dir, "statistics_summary.txt")
+                main_stats = os.path.join(run_dir, f"statistics_summary{SUFFIX_D10_PLUS}.txt")
             if not os.path.exists(main_stats):
                 continue
 
-            sub_summary = os.path.join(run_dir, f"statistics_summary{DIAMETER_SUFFIX}.txt")
+            sub_summary = os.path.join(run_dir, f"statistics_summary{subrange.suffix}.txt")
             if os.path.exists(sub_summary):
                 skipped += 1
                 continue
 
             try:
-                result = write_subrange_stats(run_dir, volume)
+                result = write_subrange_stats(run_dir, volume, subrange)
                 if result:
                     processed += 1
                     print(f"  [{processed}] {sk}/{run_name}")

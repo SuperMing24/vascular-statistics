@@ -198,7 +198,7 @@ def run(
     else:
         print(f"  口径: legacy 各向同性（×2/×4）")
     subprocess.run(cmd, check=True)
-    print(f"  完成。汇总: statistics_summary_d10+um.txt")
+    print(f"  完成。汇总: statistics_summary.txt（全量）")
 
     # --- 收尾：面向样本模式下写入 run_meta.json ---
     if output_root:

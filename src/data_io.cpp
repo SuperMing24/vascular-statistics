@@ -166,20 +166,20 @@ bool GenerateStatistics(const std::string& edges_file,
     in.close();
 
     // ---------- 打开输出文件 ----------
-    // >=10um 子范围的段明细，加 _d10+um 后缀
-    std::ofstream out1("generate_vessel_d10+um.txt");
-    std::ofstream out2("generate_vessel_radius_d10+um.txt");
-    std::ofstream out3("generate_vessel_path_length_d10+um.txt");
-    std::ofstream out4("generate_vessel_tortuosity_d10+um.txt");
-    // 直径 >=10 um 为子范围（非完整统计），加 _d10+um 后缀。
-    std::ofstream out5("statistics_summary_d10+um.txt");
+    // 全量明细 + 全量汇总（无后缀）。过滤/分档（直径子范围、P99、节点数）交由
+    // Python 子范围命令处理；C++ 只产出未过滤的全量结果。
+    std::ofstream out1("generate_vessel.txt");
+    std::ofstream out2("generate_vessel_radius.txt");
+    std::ofstream out3("generate_vessel_path_length.txt");
+    std::ofstream out4("generate_vessel_tortuosity.txt");
+    std::ofstream out5("statistics_summary.txt");
 
     if (!out1 || !out2 || !out3 || !out4 || !out5) {
         std::cerr << "创建输出文件失败\n";
         return false;
     }
 
-    out5 << "Vascular_Statistics — 单次运行统计\n";
+    out5 << "Vascular_Statistics — 单次运行统计（全量，未过滤）\n";
 
     // ---------- 单位模式（轨道 B）----------
     // 提供 spacing（sx,sy,sz 均 > 0）→ 各向异性物理单位（μm）：
@@ -194,10 +194,8 @@ bool GenerateStatistics(const std::string& edges_file,
     const double r_scale = radius_physical ? 1.0
                          : (anisotropic ? (sx + sy) / 2.0 : 2.0);
     const double length_um_factor = anisotropic ? 1.0 : 2.0;
-    // 有效段半径阈值：锁住直径 10μm → radius ≥ 10/(2·r_scale)。
-    //   各向异性像素半径→(sx+sy)/2 标量；方案B 物理 μm→r_scale=1 故阈值=5μm；legacy→2.5。
-    const double radius_threshold_voxel = 10.0 / (2.0 * r_scale);
-    // 绝对兜底：各向异性下 path_length 已是 μm → 1200μm；legacy 为体素 → 600。
+    // 绝对兜底（仅用于离群诊断，不参与过滤）：各向异性下 path_length 已是 μm → 1200μm；
+    //   legacy 为体素 → 600。
     const double abs_length_threshold = anisotropic ? 1200.0 : 600.0;
 
     // ---------- 段遍历 ----------
@@ -205,11 +203,11 @@ bool GenerateStatistics(const std::string& edges_file,
     int previous_node, next_node;
     bool end_of_vessel;
     double avg_temp;
-    // 有效段（直径>=10μm 且节点数>=3）的逐段值缓存，
-    // 用于遍历结束后计算均值 + 中位数 + 离群标记（轨道 A）。
-    std::vector<double> eff_radii;
-    std::vector<double> eff_lengths;
-    std::vector<double> eff_torts;
+    // 全量逐段值缓存（无过滤）：每个完成遍历的段都纳入，
+    // 用于遍历结束后计算均值 + 中位数 + 离群诊断。
+    std::vector<double> seg_radii;
+    std::vector<double> seg_lengths;
+    std::vector<double> seg_torts;
 
     double vessel_start_x, vessel_start_y, vessel_start_z;
     double vessel_end_x, vessel_end_y, vessel_end_z;
@@ -287,14 +285,13 @@ bool GenerateStatistics(const std::string& edges_file,
                             out4 << path_length / path_direct_distance << "\n";
                         }
 
-                        if (k > 2 && avg_temp >= radius_threshold_voxel) {
-                            eff_radii.push_back(avg_temp);
-                            eff_lengths.push_back(path_length);
-                            eff_torts.push_back(
-                                path_direct_distance < 1e-10
-                                    ? 1.0
-                                    : path_length / path_direct_distance);
-                        }
+                        // 全量：每个完成遍历的段都纳入，无任何过滤。
+                        seg_radii.push_back(avg_temp);
+                        seg_lengths.push_back(path_length);
+                        seg_torts.push_back(
+                            path_direct_distance < 1e-10
+                                ? 1.0
+                                : path_length / path_direct_distance);
                         break;
                     }
                     break;  // 找到匹配边后退出 for 循环，while 循环以新 previous_node 继续
@@ -337,14 +334,13 @@ bool GenerateStatistics(const std::string& edges_file,
                             out4 << path_length / path_direct_distance << "\n";
                         }
 
-                        if (k > 2 && avg_temp >= radius_threshold_voxel) {
-                            eff_radii.push_back(avg_temp);
-                            eff_lengths.push_back(path_length);
-                            eff_torts.push_back(
-                                path_direct_distance < 1e-10
-                                    ? 1.0
-                                    : path_length / path_direct_distance);
-                        }
+                        // 全量：每个完成遍历的段都纳入，无任何过滤。
+                        seg_radii.push_back(avg_temp);
+                        seg_lengths.push_back(path_length);
+                        seg_torts.push_back(
+                            path_direct_distance < 1e-10
+                                ? 1.0
+                                : path_length / path_direct_distance);
                         break;
                     }
                     break;  // 找到匹配边后退出 for 循环，while 循环以新 previous_node 继续
@@ -362,91 +358,45 @@ bool GenerateStatistics(const std::string& edges_file,
         }
     }
 
-    // ---------- 计算汇总指标（百分位排除 + 均值/中位数，轨道 A v2）----------
-    const int n_eff_all = static_cast<int>(eff_lengths.size());
+    // ---------- 计算汇总指标（全量，无过滤；均值/中位数 + 离群诊断）----------
+    const int n_seg = static_cast<int>(seg_lengths.size());
 
-    // --- P99 百分位排除（实际剔除，非仅标记）---
-    // 对段长取 P99 作为阈值，超出的段不纳入统计。
-    // P99 = 排除顶 1% 极端长尾；对正常样本影响小（~1%），
-    // 对过度连接样本会剔除极端连接段。
-    const double kPercentile = 99.0;  // P99
-    double p99_threshold = 0.0;
-    int n_excluded = 0;
-    if (n_eff_all > 0) {
-        std::vector<double> lengths_sorted = eff_lengths;
-        std::sort(lengths_sorted.begin(), lengths_sorted.end());
-        const size_t idx99 = static_cast<size_t>(
-            kPercentile / 100.0 * static_cast<double>(lengths_sorted.size()));
-        p99_threshold = (idx99 < lengths_sorted.size())
-                            ? lengths_sorted[idx99]
-                            : lengths_sorted.back();
-        n_excluded = static_cast<int>(lengths_sorted.size() - idx99);
-    }
+    // 全量统计量：纳入所有完成遍历的段，不做 P99/节点数/直径过滤。
+    const double mean_radius = Mean(seg_radii);
+    const double mean_length = Mean(seg_lengths);
+    const double mean_tort = Mean(seg_torts);
+    const double median_radius = Median(seg_radii);
+    const double median_length = Median(seg_lengths);
+    const double median_tort = Median(seg_torts);
 
-    // 构建排除后向量
-    std::vector<double> filt_radii, filt_lengths, filt_torts;
-    filt_radii.reserve(n_eff_all - n_excluded);
-    filt_lengths.reserve(n_eff_all - n_excluded);
-    filt_torts.reserve(n_eff_all - n_excluded);
-    for (int i = 0; i < n_eff_all; ++i) {
-        if (eff_lengths[i] <= p99_threshold) {
-            filt_radii.push_back(eff_radii[i]);
-            filt_lengths.push_back(eff_lengths[i]);
-            filt_torts.push_back(eff_torts[i]);
-        }
-    }
-    const int n_eff = static_cast<int>(filt_lengths.size());
-
-    // 排除后统计量
-    const double mean_radius = Mean(filt_radii);
-    const double mean_length = Mean(filt_lengths);
-    const double mean_tort = Mean(filt_torts);
-    const double median_radius = Median(filt_radii);
-    const double median_length = Median(filt_lengths);
-    const double median_tort = Median(filt_torts);
-
-    // 排除前均值（参考）
-    const double mean_length_all = Mean(eff_lengths);
-    const double mean_tort_all = Mean(eff_torts);
-
-    // 离群诊断（信息项，基于原始 eff_lengths，不影响统计）：
+    // 离群诊断（纯信息项，不参与过滤，仅做骨架质量预警）：
     //   MAD（k=3.5，相对/分布判据，单位无关）
     //   绝对兜底：各向异性下 path_length 为 μm → 1200μm；legacy 为体素 → 600
     const double kMadK = 3.5;
-    const int mad_outliers = CountMadOutliers(eff_lengths, kMadK);
+    const int mad_outliers = CountMadOutliers(seg_lengths, kMadK);
     int abs_outliers = 0;
-    for (double len : eff_lengths) {
+    for (double len : seg_lengths) {
         if (len > abs_length_threshold) ++abs_outliers;
     }
-    const double mad_ratio = n_eff_all > 0 ? 100.0 * mad_outliers / n_eff_all : 0.0;
-    const double abs_ratio = n_eff_all > 0 ? 100.0 * abs_outliers / n_eff_all : 0.0;
-    const double excluded_ratio = n_eff_all > 0 ? 100.0 * n_excluded / n_eff_all : 0.0;
+    const double mad_ratio = n_seg > 0 ? 100.0 * mad_outliers / n_seg : 0.0;
+    const double abs_ratio = n_seg > 0 ? 100.0 * abs_outliers / n_seg : 0.0;
 
     // ---------- 写汇总文件 ----------
     const std::string unit_note = radius_physical
         ? "（各向异性 spacing；半径=物理 μm 各向异性 EDT，方案B r_scale=1）"
         : (anisotropic ? "（各向异性 spacing 物理单位；半径标量 r_scale=(sx+sy)/2）"
                        : "（legacy 各向同性 2μm/体素）");
-    const std::string p99_unit = anisotropic ? " μm" : " 体素";
 
     out5 << "平均直径 (μm): " << mean_radius * 2.0 * r_scale << "\n"
          << "中位直径 (μm): " << median_radius * 2.0 * r_scale << "\n"
          << "平均长度 (μm): " << mean_length * length_um_factor << "\n"
          << "中位长度 (μm): " << median_length * length_um_factor << "\n"
-         << "段密度 (seg/mm³): " << static_cast<double>(n_eff) / volume << "\n"
+         << "段密度 (seg/mm³): " << static_cast<double>(n_seg) / volume << "\n"
          << "平均弯曲度: " << mean_tort << "\n"
          << "中位弯曲度: " << median_tort << "\n"
-         << "有效段数: " << n_eff << "\n"
+         << "总段数: " << n_seg << "\n"
          << "\n"
-         << "--- 百分位排除（P" << static_cast<int>(kPercentile)
-         << " = " << p99_threshold << p99_unit << "）---\n"
-         << "排除段数: " << n_excluded << " (" << excluded_ratio << "%)\n"
-         << "排除前有效段数: " << n_eff_all << "\n"
-         << "排除前平均长度: " << mean_length_all * length_um_factor
-         << (anisotropic ? " μm" : " 体素") << "\n"
-         << "排除前平均弯曲度: " << mean_tort_all << "\n"
-         << "\n"
-         << "--- 离群诊断（信息项，已由 P99 排除处理）---\n"
+         << "--- 离群诊断（纯信息项，不参与过滤）---\n"
          << "MAD 离群段 (k=3.5): " << mad_outliers << " (" << mad_ratio << "%)\n"
          << "超绝对阈值段 (>" << abs_length_threshold
          << (anisotropic ? " μm" : " 体素") << "): " << abs_outliers
@@ -454,10 +404,8 @@ bool GenerateStatistics(const std::string& edges_file,
     if (abs_ratio > 1.0) {
         out5 << "⚠️ 注意：骨架可能存在过度连接（绝对超长段比例偏高）\n";
     }
-    out5 << "\n注：统计值基于 P" << static_cast<int>(kPercentile)
-         << " 排除后的 " << n_eff << " 个有效段（直径 >= 10 μm，节点数 >= 3）；"
-            "P99 排除顶 1% 极端长尾，排除的段写入明细文件但不参与统计；"
-            "单位口径"
+    out5 << "\n注：全量统计，纳入所有完成遍历的血管段（无直径/节点数/P99 过滤）；"
+            "过滤与分档由 Python 子范围命令（diameter-stats）处理；单位口径"
          << unit_note << "\n";
 
     out1.close();

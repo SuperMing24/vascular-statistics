@@ -505,7 +505,7 @@ def pipeline(input, volume, output_stem, phases, sampling, speed, anisotropic, p
         click.echo("C++ 统计执行失败。", err=True)
         raise click.Abort()
 
-    click.echo(f"管线完成。汇总文件: statistics_summary_d10+um.txt")
+    click.echo(f"管线完成。汇总文件: statistics_summary.txt（全量）")
 
     # ── 写入运行元数据（每次运行的完整参数记录）──
     import json as _json
@@ -827,11 +827,12 @@ def extract_metadata_cmd(data_root, output_root, voxel_spacing_config,
 @click.option("--force", is_flag=True, default=False,
               help="强制聚合：即使跨 run 口径不一致也继续")
 def aggregate_stats_cmd(output_root, sample_key, force):
-    """汇总同一样本多次骨架化运行的形态学统计。
+    """汇总同一样本多次骨架化运行的形态学统计（全量）。
 
-    遍历每个样本目录下所有 run_*/statistics_summary_d10+um.txt，
+    遍历每个样本目录下所有 run_*/statistics_summary.txt（全量），
     计算 4 项指标的均值 ± 标准差，
-    将结果写入样本目录下的 statistics_summary_d10+um.txt（与 sample_metadata.json 同级）。
+    将结果写入样本目录下的 statistics_summary.txt（与 sample_metadata.json 同级）。
+    子范围汇总请用 aggregate-diameter-stats --range。
 
     示例：
       vascular-stats aggregate-stats --output-root /share/home/sukm/experiments/vascstats
@@ -849,35 +850,49 @@ def aggregate_stats_cmd(output_root, sample_key, force):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 子范围统计命令（默认 0-10 um）。旧名 micro-* 保留为别名。
+# 子范围统计命令（从 C++ 全量明细按直径档位派生）。旧名 micro-* 保留为别名。
 # ═══════════════════════════════════════════════════════════════════════
 
-from vascular_statistics.subrange_stats import DIAMETER_SUFFIX
+from vascular_statistics.subrange_stats import (
+    DIAMETER_SUFFIX, SUFFIX_D10_PLUS, SUBRANGE_D0_10, SUBRANGE_D10_PLUS,
+)
+
+# CLI --range 取值 → SubRange 预设 / 聚合后缀
+_SUBRANGE_PRESETS = {"0-10": SUBRANGE_D0_10, "10+": SUBRANGE_D10_PLUS}
+_RANGE_SUFFIX = {"0-10": DIAMETER_SUFFIX, "10+": SUFFIX_D10_PLUS}
+
 
 @main.command("diameter-stats")
 @click.option("--output-root", type=click.Path(exists=True), required=True,
               help="输出根目录（含样本子目录）")
 @click.option("--sample-key", default=None,
               help="仅处理指定样本（缺省则全部已完成骨架化的样本）")
-def diameter_stats_cmd(output_root, sample_key):
-    """为所有已完成骨架化的 run 生成子范围（0-10 um）统计。
+@click.option("--range", "diameter_range", type=click.Choice(["0-10", "10+"]),
+              default="0-10",
+              help="直径档位：0-10（0-10 um，默认）或 10+（>=10 um）。")
+def diameter_stats_cmd(output_root, sample_key, diameter_range):
+    """为所有已完成骨架化的 run 生成指定直径档位的子范围统计。
 
-    从已有 generate_vessel_radius_d10+um.txt / generate_vessel_path_length_d10+um.txt /
-    generate_vessel_tortuosity_d10+um.txt 中提取直径 < 10 um 的血管段，
-    写入新的 _d0-10um 后缀文件，不覆盖原有统计。
+    从 C++ 全量明细（generate_vessel_radius.txt 等，向后兼容旧 _d10+um 名）中
+    按 --range 指定的直径范围 + 节点数 >= 3 + P99 过滤，写入对应后缀文件
+    （0-10 → _d0-10um；10+ → _d10+um），不覆盖全量明细。
 
-    幂等：已有 statistics_summary_d0-10um.txt 的 run 将自动跳过。
+    幂等：已有对应 statistics_summary{后缀}.txt 的 run 将自动跳过。
 
     示例：
       vascular-stats diameter-stats --output-root /share/home/sukm/experiments/vascstats
-      vascular-stats diameter-stats --output-root ... --sample-key "BCAS_1st/..."
+      vascular-stats diameter-stats --output-root ... --range 10+
     """
     from vascular_statistics.subrange_stats import run_subrange_stats
 
     sample_keys = [sample_key] if sample_key else None
-    result = run_subrange_stats(output_root, sample_keys=sample_keys)
+    result = run_subrange_stats(
+        output_root, sample_keys=sample_keys,
+        subrange=_SUBRANGE_PRESETS[diameter_range],
+    )
 
     click.echo()
+    click.echo(f"档位: {diameter_range} um")
     click.echo(f"已处理: {result['processed']}, "
                f"跳过(已有): {result['skipped']}, "
                f"无符合条件的段: {result['no_result']}, "
@@ -898,23 +913,29 @@ def micro_stats_cmd(output_root, sample_key):
               help="输出根目录（含样本子目录）")
 @click.option("--sample-key", default=None,
               help="仅处理指定样本（缺省则全部）")
+@click.option("--range", "diameter_range", type=click.Choice(["0-10", "10+"]),
+              default="0-10",
+              help="直径档位：0-10（默认）或 10+。须与 diameter-stats 的 --range 一致。")
 @click.option("--force", is_flag=True, default=False,
               help="强制聚合：即使跨 run 口径不一致也继续")
-def aggregate_diameter_stats_cmd(output_root, sample_key, force):
-    """汇总同一样本多次骨架化运行的子范围（0-10 um）统计。
+def aggregate_diameter_stats_cmd(output_root, sample_key, diameter_range, force):
+    """汇总同一样本多次骨架化运行的子范围统计。
 
-    遍历每个样本目录下所有 run_*/statistics_summary_d0-10um.txt，
-    计算 4 项指标的均值 +/- 标准差，
-    将结果写入样本目录下的 statistics_summary_d0-10um.txt。
+    遍历每个样本目录下所有 run_*/statistics_summary{后缀}.txt（后缀随 --range：
+    0-10 → _d0-10um；10+ → _d10+um），计算 4 项指标的均值 +/- 标准差，
+    写入样本目录下的同名汇总文件。
 
     示例：
       vascular-stats aggregate-diameter-stats --output-root /share/home/sukm/experiments/vascstats
-      vascular-stats aggregate-diameter-stats --output-root ... --sample-key "BCAS_1st/..."
+      vascular-stats aggregate-diameter-stats --output-root ... --range 10+
     """
     from vascular_statistics.aggregate_stats import run_aggregation
 
     sample_keys = [sample_key] if sample_key else None
-    result = run_aggregation(output_root, sample_keys=sample_keys, suffix=DIAMETER_SUFFIX, force=force)
+    result = run_aggregation(
+        output_root, sample_keys=sample_keys,
+        suffix=_RANGE_SUFFIX[diameter_range], force=force,
+    )
 
     click.echo()
     click.echo(f"已处理: {result['processed']}, "

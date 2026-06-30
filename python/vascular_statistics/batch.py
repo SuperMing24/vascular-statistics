@@ -604,4 +604,4 @@ def batch_stats(
         pajek_to_cpp_input(fpath, edges_out, vertices_out)
 
         subprocess.run([exe_path, stem, stem, str(volume)], check=True)
-        print(f"  → {stem}_statistics_summary_d10+um.txt")
+        print(f"  → statistics_summary.txt（全量）")

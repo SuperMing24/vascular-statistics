@@ -45,7 +45,7 @@ def _load_ranges(config_path: str | None = None) -> dict[str, Any]:
 
 
 def _parse_stats_file(path: str) -> dict[str, float] | None:
-    """解析 statistics_summary_d10+um.txt 提取关键指标。"""
+    """解析 statistics_summary.txt（全量）提取关键指标。"""
     try:
         with open(path, encoding="utf-8") as f:
             text = f.read()
@@ -58,7 +58,7 @@ def _parse_stats_file(path: str) -> dict[str, float] | None:
         "avg_length": r"平均长度 \(μm\):\s*([\d.]+)",
         "avg_tortuosity": r"平均弯曲度[^:]*:\s*([\d.]+)",
         "segment_density": r"段密度[^:]*:\s*([\d.]+)",
-        "segment_count": r"有效段数:\s*(\d+)",
+        "segment_count": r"(?:总段数|有效段数):\s*(\d+)",
         "volume_mm3": r"体积[^:]*:\s*([\d.]+)",
     }
     for key, pat in patterns.items():
@@ -141,7 +141,7 @@ def validate_structural_presubmit(seg_root: str) -> tuple[bool, str, dict]:
 def validate_semantic(run_dir: str, species: str = "mouse_brain") -> tuple[bool, str, dict]:
     """Se1–Se5: 检查统计输出是否在生理范围内。"""
     ranges = _load_ranges().get(species, {})
-    stats_path = os.path.join(run_dir, "statistics_summary_d10+um.txt")
+    stats_path = os.path.join(run_dir, "statistics_summary.txt")
     issues: list[str] = []
     details: dict[str, Any] = {}
 
@@ -305,7 +305,7 @@ def validate_numeric(run_dir: str) -> tuple[bool, str, dict]:
     issues: list[str] = []
     details: dict[str, Any] = {}
 
-    stats_path = os.path.join(run_dir, "statistics_summary_d10+um.txt")
+    stats_path = os.path.join(run_dir, "statistics_summary.txt")
     if not os.path.exists(stats_path):
         return False, f"统计文件不存在: {stats_path}", details
 
@@ -335,7 +335,7 @@ def validate_numeric(run_dir: str) -> tuple[bool, str, dict]:
                 issues.append(f"N2 volume_mm3 <= 0: {vol}")
 
     # N3: 关键输出文件非空
-    for fname in ["skeleton.pajek", "statistics_summary_d10+um.txt"]:
+    for fname in ["skeleton.pajek", "statistics_summary.txt"]:
         fp = os.path.join(run_dir, fname)
         if os.path.exists(fp) and os.path.getsize(fp) == 0:
             issues.append(f"N3 空文件: {fname}")

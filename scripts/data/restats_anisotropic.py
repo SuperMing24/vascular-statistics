@@ -15,7 +15,7 @@
 原理：
   1. 扫描每个样本目录下所有含 skeleton.pajek 的 run_* 子目录
   2. 从 sample_metadata.json 读取 voxel_spacing_um
-  3. 运行格式转换 + C++ 统计（各向异性口径）——覆盖旧 statistics_summary_d10+um.txt
+  3. 运行格式转换 + C++ 统计（各向异性口径）——覆盖旧 statistics_summary.txt（全量）
   4. 更新 run_meta.json（写入 stats_unit_mode / spacing_um / r_scale）
   5. 可选：自动刷新 sample-level aggregate + micro-stats
 """
@@ -109,7 +109,7 @@ def restats_run(run_dir: str, volume_mm3: float, spacing_um: list[float],
         json.dump(meta, f, indent=2, ensure_ascii=False)
 
     # --- 读取新统计摘要（用于日志） ---
-    summary_path = os.path.join(run_dir, "statistics_summary_d10+um.txt")
+    summary_path = os.path.join(run_dir, "statistics_summary.txt")
     diam = length = tort = segs = "?"
     if os.path.exists(summary_path):
         with open(summary_path, "r", encoding="utf-8") as f:
@@ -120,7 +120,7 @@ def restats_run(run_dir: str, volume_mm3: float, spacing_um: list[float],
                     length = line.split(":")[-1].strip()
                 elif "平均弯曲度" in line:
                     tort = line.split(":")[-1].strip()
-                elif "有效段数" in line:
+                elif "总段数" in line or "有效段数" in line:
                     segs = line.split(":")[-1].strip()
 
     print(f"    中位直径={diam} μm, 中位长度={length} μm, "
