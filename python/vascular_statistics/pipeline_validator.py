@@ -33,13 +33,23 @@ def _load_ranges(config_path: str | None = None) -> dict[str, Any]:
     if os.path.exists(config_path):
         with open(config_path, encoding="utf-8") as f:
             return json.load(f)
-    # 内置默认（鼠脑血管）
+    # 内置默认（鼠脑血管，每群体一套）
     return {
         "mouse_brain": {
-            "diameter_um": {"min": 5, "max": 50},
-            "segment_length_um": {"min": 10, "max": 200},
-            "tortuosity": {"min": 1.0, "max": 1.5},
-            "segment_count_min": 1,
+            "full": {
+                "diameter_um": {"min": 2, "max": 15},
+                "segment_length_um": {"min": 10, "max": 100},
+                "tortuosity": {"min": 1.0, "max": 1.5},
+                "segment_density_per_mm3": {"min": 1000, "max": 80000},
+                "segment_count_min": 1,
+            },
+            "d10+um": {
+                "diameter_um": {"min": 5, "max": 50},
+                "segment_length_um": {"min": 10, "max": 200},
+                "tortuosity": {"min": 1.0, "max": 1.5},
+                "segment_density_per_mm3": {"min": 0, "max": 10000},
+                "segment_count_min": 1,
+            },
         }
     }
 
@@ -138,12 +148,17 @@ def validate_structural_presubmit(seg_root: str) -> tuple[bool, str, dict]:
 # ───────────────────────────────────────────────────────────────────────
 
 
-def validate_semantic(run_dir: str, species: str = "mouse_brain") -> tuple[bool, str, dict]:
-    """Se1–Se5: 检查统计输出是否在生理范围内。"""
-    ranges = _load_ranges().get(species, {})
+def validate_semantic(run_dir: str, species: str = "mouse_brain",
+                      population: str = "full") -> tuple[bool, str, dict]:
+    """Se1–Se5: 检查统计输出是否在生理范围内（按群体选范围）。
+
+    population: "full"（默认，对应 statistics_summary.txt 全量）或 "d10+um"（≥10μm 子范围）。
+    每群体一套范围——全量毛细主导、子范围较大血管，中心趋势不同，不能共用一把尺子。
+    """
+    ranges = _load_ranges().get(species, {}).get(population, {})
     stats_path = os.path.join(run_dir, "statistics_summary.txt")
     issues: list[str] = []
-    details: dict[str, Any] = {}
+    details: dict[str, Any] = {"population": population}
 
     metrics = _parse_stats_file(stats_path)
     if metrics is None:
@@ -154,7 +169,7 @@ def validate_semantic(run_dir: str, species: str = "mouse_brain") -> tuple[bool,
     # Se1: 直径
     if "avg_diameter" in metrics:
         r = ranges.get("diameter_um", {})
-        lo, hi = r.get("min", 5), r.get("max", 50)
+        lo, hi = r.get("min", 2), r.get("max", 15)
         v = metrics["avg_diameter"]
         if not (lo <= v <= hi):
             issues.append(f"Se1 平均直径 {v:.1f} μm 超出范围 [{lo}, {hi}]")
@@ -162,7 +177,7 @@ def validate_semantic(run_dir: str, species: str = "mouse_brain") -> tuple[bool,
     # Se2: 段长
     if "avg_length" in metrics:
         r = ranges.get("segment_length_um", {})
-        lo, hi = r.get("min", 10), r.get("max", 200)
+        lo, hi = r.get("min", 10), r.get("max", 100)
         v = metrics["avg_length"]
         if not (lo <= v <= hi):
             issues.append(f"Se2 平均段长 {v:.1f} μm 超出范围 [{lo}, {hi}]")
@@ -175,12 +190,15 @@ def validate_semantic(run_dir: str, species: str = "mouse_brain") -> tuple[bool,
         if not (lo <= v <= hi):
             issues.append(f"Se3 平均弯曲度 {v:.4f} 超出范围 [{lo}, {hi}]")
 
-    # Se4: 段密度 > 0
+    # Se4: 段密度（按群体范围；密度≤0 单列为统计失败）
     if "segment_density" in metrics:
-        if metrics["segment_density"] <= 0:
-            issues.append("Se4 段密度 ≤ 0")
-        if metrics["segment_density"] > 10000:
-            issues.append(f"Se4 段密度异常高: {metrics['segment_density']:.0f}")
+        r = ranges.get("segment_density_per_mm3", {})
+        lo, hi = r.get("min", 0), r.get("max", 80000)
+        v = metrics["segment_density"]
+        if v <= 0:
+            issues.append("Se4 段密度 ≤ 0（统计可能失败）")
+        elif not (lo <= v <= hi):
+            issues.append(f"Se4 段密度 {v:.0f} 超出范围 [{lo}, {hi}]")
 
     # Se5: Pajek 骨架非空
     pajek = os.path.join(run_dir, "skeleton.pajek")
