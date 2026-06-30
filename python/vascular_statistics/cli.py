@@ -1041,12 +1041,15 @@ def validate_group():
 @validate_group.command("run")
 @click.argument("run_dir", type=click.Path(exists=True))
 @click.option("--species", default="mouse_brain", help="物种（对应 validation_ranges.json key）")
+@click.option("--population", type=click.Choice(["full", "d0-10um", "d10+um"]), default="full",
+              help="验证哪个群体：full（全量，默认）/ d0-10um（小血管）/ d10+um（大血管）。"
+                   "各读对应 statistics_summary{后缀}.txt 并套各自生理范围。")
 @click.option("--json-output", "-j", is_flag=True, help="JSON 格式输出")
-def validate_run_cmd(run_dir, species, json_output):
+def validate_run_cmd(run_dir, species, population, json_output):
     """验证单个 run 目录：结构 + 语义 + 数值。"""
     from vascular_statistics.pipeline_validator import validate_run
 
-    result = validate_run(run_dir, species)
+    result = validate_run(run_dir, species, population)
     if json_output:
         import json as _json
         click.echo(_json.dumps(result, indent=2, ensure_ascii=False))
@@ -1062,12 +1065,14 @@ def validate_run_cmd(run_dir, species, json_output):
 @validate_group.command("sample")
 @click.argument("sample_dir", type=click.Path(exists=True))
 @click.option("--species", default="mouse_brain", help="物种")
+@click.option("--population", type=click.Choice(["full", "d0-10um", "d10+um"]), default="full",
+              help="验证哪个群体：full（默认）/ d0-10um（小血管）/ d10+um（大血管）。")
 @click.option("--json-output", "-j", is_flag=True, help="JSON 格式输出")
-def validate_sample_cmd(sample_dir, species, json_output):
+def validate_sample_cmd(sample_dir, species, population, json_output):
     """验证单个样本目录：所有 run + 跨运行一致性。"""
     from vascular_statistics.pipeline_validator import validate_sample
 
-    result = validate_sample(sample_dir, species)
+    result = validate_sample(sample_dir, species, population)
     if json_output:
         import json as _json
         click.echo(_json.dumps(result, indent=2, ensure_ascii=False))

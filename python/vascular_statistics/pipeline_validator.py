@@ -33,7 +33,7 @@ def _load_ranges(config_path: str | None = None) -> dict[str, Any]:
     if os.path.exists(config_path):
         with open(config_path, encoding="utf-8") as f:
             return json.load(f)
-    # 内置默认（鼠脑血管，每群体一套）
+    # 内置默认（鼠脑血管，每群体一套：全量 / 小血管 / 大血管）
     return {
         "mouse_brain": {
             "full": {
@@ -43,11 +43,18 @@ def _load_ranges(config_path: str | None = None) -> dict[str, Any]:
                 "segment_density_per_mm3": {"min": 1000, "max": 80000},
                 "segment_count_min": 1,
             },
-            "d10+um": {
-                "diameter_um": {"min": 5, "max": 50},
-                "segment_length_um": {"min": 10, "max": 200},
+            "d0-10um": {
+                "diameter_um": {"min": 2, "max": 10},
+                "segment_length_um": {"min": 10, "max": 100},
                 "tortuosity": {"min": 1.0, "max": 1.5},
-                "segment_density_per_mm3": {"min": 0, "max": 10000},
+                "segment_density_per_mm3": {"min": 1000, "max": 70000},
+                "segment_count_min": 1,
+            },
+            "d10+um": {
+                "diameter_um": {"min": 8, "max": 50},
+                "segment_length_um": {"min": 5, "max": 200},
+                "tortuosity": {"min": 1.0, "max": 1.5},
+                "segment_density_per_mm3": {"min": 0, "max": 5000},
                 "segment_count_min": 1,
             },
         }
@@ -148,15 +155,24 @@ def validate_structural_presubmit(seg_root: str) -> tuple[bool, str, dict]:
 # ───────────────────────────────────────────────────────────────────────
 
 
+_POPULATION_FILE = {
+    "full": "statistics_summary.txt",
+    "d0-10um": "statistics_summary_d0-10um.txt",
+    "d10+um": "statistics_summary_d10+um.txt",
+}
+
+
 def validate_semantic(run_dir: str, species: str = "mouse_brain",
                       population: str = "full") -> tuple[bool, str, dict]:
-    """Se1–Se5: 检查统计输出是否在生理范围内（按群体选范围）。
+    """Se1–Se5: 检查统计输出是否在生理范围内（按群体选范围 + 选文件）。
 
-    population: "full"（默认，对应 statistics_summary.txt 全量）或 "d10+um"（≥10μm 子范围）。
-    每群体一套范围——全量毛细主导、子范围较大血管，中心趋势不同，不能共用一把尺子。
+    population: "full"（默认，全量）/ "d0-10um"（小血管）/ "d10+um"（大血管）。
+    每群体读对应的 statistics_summary{后缀}.txt，并套各自范围——三群体（全量/小/大血管）
+    中心趋势不同，不能共用一把尺子。
     """
     ranges = _load_ranges().get(species, {}).get(population, {})
-    stats_path = os.path.join(run_dir, "statistics_summary.txt")
+    stats_path = os.path.join(
+        run_dir, _POPULATION_FILE.get(population, "statistics_summary.txt"))
     issues: list[str] = []
     details: dict[str, Any] = {"population": population}
 
@@ -367,13 +383,14 @@ def validate_numeric(run_dir: str) -> tuple[bool, str, dict]:
 # ───────────────────────────────────────────────────────────────────────
 
 
-def validate_run(run_dir: str, species: str = "mouse_brain") -> dict[str, Any]:
-    """对单个 run 目录执行所有适用检查。"""
+def validate_run(run_dir: str, species: str = "mouse_brain",
+                 population: str = "full") -> dict[str, Any]:
+    """对单个 run 目录执行所有适用检查。population 选验证哪个群体（全量/小/大血管）。"""
     results: dict[str, Any] = {"run_dir": run_dir, "checks": {}}
 
     for name, func in [
         ("structural", lambda: validate_structural_run(run_dir)),
-        ("semantic", lambda: validate_semantic(run_dir, species)),
+        ("semantic", lambda: validate_semantic(run_dir, species, population)),
         ("numeric", lambda: validate_numeric(run_dir)),
     ]:
         passed, msg, details = func()
@@ -383,7 +400,8 @@ def validate_run(run_dir: str, species: str = "mouse_brain") -> dict[str, Any]:
     return results
 
 
-def validate_sample(sample_dir: str, species: str = "mouse_brain") -> dict[str, Any]:
+def validate_sample(sample_dir: str, species: str = "mouse_brain",
+                    population: str = "full") -> dict[str, Any]:
     """对单个样本目录执行所有适用检查（含一致性）。"""
     results: dict[str, Any] = {"sample_dir": sample_dir, "checks": {}}
 
@@ -392,7 +410,7 @@ def validate_sample(sample_dir: str, species: str = "mouse_brain") -> dict[str, 
     for entry in sorted(os.listdir(sample_dir)):
         run_path = os.path.join(sample_dir, entry)
         if os.path.isdir(run_path) and entry.startswith("run_"):
-            r = validate_run(run_path, species)
+            r = validate_run(run_path, species, population)
             if not r["all_passed"]:
                 run_issues.append(f"{entry}: {r['checks']}")
 

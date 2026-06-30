@@ -1,34 +1,45 @@
 {
-  "_comment": "管线验证生理范围 —— 每群体一套范围。full=C++ 全量默认输出（毛细主导）；d10+um=≥10μm 子范围（较大血管）。鼠脑文献 + 实测 p1–p99 联合定标。可拓展多物种。",
+  "_comment": "管线验证生理范围 —— 每群体一套范围。full=全量(所有段)；d0-10um=小血管子范围；d10+um=大血管子范围。三档均按 157 run(cropped_z physical)实测 p1–p99 + 鼠脑文献联合定标。可拓展多物种。",
 
   "mouse_brain": {
-    "_ref": "docs/mouse_brain_vascular_physiology_reference_20260619.md",
+    "_ref": "docs/mouse_brain_vascular_physiology_reference_20260619.md §1.5",
 
     "full": {
-      "_population": "全量：所有完成遍历的血管段（毛细主导，无 直径/节点数/P99 过滤）—— C++ statistics_summary.txt 默认输出",
-      "_basis": "157 run(cropped_z, physical μm)实测 + 文献：毛细 4.25-5.1μm/段长21-37μm、全脑混合~35μm、MVD 3.5-5.1万 branches/mm³",
-      "diameter_um": {"min": 2, "max": 15, "_note": "实测均值 4.8-7.4μm；毛细 2-6μm；>15 提示毛细漏检（毛细被欠分割）"},
-      "segment_length_um": {"min": 10, "max": 100, "_note": "实测均值 21-42μm；>100 提示过度连接（异常骨架均值可达数百）"},
-      "tortuosity": {"min": 1.0, "max": 1.5, "_note": "实测均值 1.06-1.24；全脑文献 1.13-1.16；>1.5 提示拓扑错误/病理"},
-      "segment_density_per_mm3": {"min": 1000, "max": 80000, "_note": "实测 1.3万-3.9万；文献 MVD 3.5-5.1万 branches/mm³；<1000 提示欠分割/体积错"},
+      "_population": "全量：所有完成遍历的血管段（含大/中/小血管，无 直径/节点数/P99 过滤）—— C++ statistics_summary.txt 默认输出。注：毛细血管在数量上占多数，故全量均值偏向小血管区间，但仍是全量口径——含大血管+k≤2 段，实测略高于纯 0-10um 子范围（直径 4.8-7.6 vs 4.3-6.0）。",
+      "_basis": "157 run 实测 p1–p99 + 文献：毛细 4.25-5.1um/段长21-37um、全脑混合~35um、MVD 3.5-5.1万 branches/mm³",
+      "diameter_um": {"min": 2, "max": 15, "_note": "实测均值 4.8-7.6um；>15 提示毛细漏检（欠分割）"},
+      "segment_length_um": {"min": 10, "max": 100, "_note": "实测均值 21-43um；>100 提示过度连接（异常骨架均值可达数百）"},
+      "tortuosity": {"min": 1.0, "max": 1.5, "_note": "实测均值 1.06-1.35；全脑文献 1.13-1.16；>1.5 提示拓扑错误/病理"},
+      "segment_density_per_mm3": {"min": 1000, "max": 80000, "_note": "实测 1.2万-3.9万；文献 MVD 3.5-5.1万；<1000 提示欠分割/体积错"},
+      "segment_count_min": 1
+    },
+
+    "d0-10um": {
+      "_population": "小血管子范围：直径 0-10um（毛细+小血管）+ 节点数≥3 + P99 —— diameter-stats --range 0-10 输出",
+      "_basis": "157 run 实测 + 文献：毛细 ≤5um(直径4.25-5.1、段长24-37、弯曲1.01-1.06)、小血管 5-10um(段长42-59、弯曲1.01-1.07)",
+      "diameter_um": {"min": 2, "max": 10, "_note": "实测均值 4.3-6.0um；按定义 ≤10um；毛细 2-6um"},
+      "segment_length_um": {"min": 10, "max": 100, "_note": "实测均值 22-45um；文献毛细 24-37、小血管 42-59um"},
+      "tortuosity": {"min": 1.0, "max": 1.5, "_note": "实测均值 1.06-1.40；文献 1.01-1.07"},
+      "segment_density_per_mm3": {"min": 1000, "max": 70000, "_note": "实测 1.1万-3.3万（小血管占全量多数）"},
       "segment_count_min": 1
     },
 
     "d10+um": {
-      "_population": "≥10μm 子范围：较大血管（直径≥10μm + 节点数≥3 + P99）—— diameter-stats --range 10+ 输出",
-      "diameter_um": {"min": 5, "max": 50, "_note": "皮质毛细~2-6μm，微动脉~10-30μm，pial artery~30-80μm"},
-      "segment_length_um": {"min": 10, "max": 200, "_note": "微血管段间分支间距，典型20-80μm"},
-      "tortuosity": {"min": 1.0, "max": 1.5, "_note": "弧长/弦长，正常血管≤1.3，病理性可达1.5+"},
-      "segment_density_per_mm3": {"min": 0, "max": 10000, "_note": "≥10μm 子群体段数/体积，实测数百量级"},
+      "_population": "大血管子范围：直径 ≥10um（微动脉/小静脉/pial）+ 节点数≥3 + P99 —— diameter-stats --range 10+ 输出",
+      "_basis": "157 run 实测 + 文献：微动脉~10-30um、后毛细小静脉~7-15um、pial artery~30-80um；中血管段长46-65um",
+      "diameter_um": {"min": 8, "max": 50, "_note": "实测均值 11.7-26.1um；按定义 ≥10um；微动脉~10-30，pial~30-80"},
+      "segment_length_um": {"min": 5, "max": 200, "_note": "实测均值 7.5-82um（大血管样本段可较短）；>200 提示过度连接"},
+      "tortuosity": {"min": 1.0, "max": 1.5, "_note": "实测均值 1.00-1.16；大血管更直"},
+      "segment_density_per_mm3": {"min": 0, "max": 5000, "_note": "实测 229-2210（大血管段数少，小crop可能为0）"},
       "segment_count_min": 1
     },
 
     "_warnings": {
-      "diameter_low": "全量≤2μm / ≥10μm档≤5μm 可能为采样下限伪影或节点漂移贴壁",
-      "diameter_high": "全量>15μm 提示毛细漏检；≥10μm档>50μm 可能为大动脉或分割假阳性连通",
-      "length_high": "全量平均段长>100μm 提示过度连接（人工/骨架把多段连成超长路径）",
+      "diameter_low": "全量/小血管≤2um 或 大血管≤8um 可能为采样下限伪影或节点漂移贴壁",
+      "diameter_high": "全量>15um 提示毛细漏检；大血管>50um 可能为大动脉或分割假阳性连通",
+      "length_high": "全量/小血管平均段长>100um、大血管>200um 提示过度连接（多段连成超长路径）",
       "tortuosity_high": ">1.3 提示血管过度弯曲，可能为骨架追踪错误或病理性改变",
-      "density_zero": "段密度=0 表示体积为0或统计阶段失败"
+      "density_zero": "全量/小血管段密度=0 表示体积为0或统计失败；大血管段密度可合理为0（小crop无大血管）"
     }
   }
 }
