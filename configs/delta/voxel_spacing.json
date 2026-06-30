@@ -1,6 +1,6 @@
 {
-    "_comment": "体素物理分辨率配置 — 层级 fallback: per_sample > per_group > default。null = 跳过本级用下级。",
-    "version": "1.0",
+    "_comment": "体素物理分辨率配置 — 层级 fallback: per_sample(精确 或 子串匹配) > per_group > default。null = 跳过本级用下级。per_sample 的 key 可以是完整 sample_key，也可以是 sample_key 的子串（如动物-时间点 token 'A161_D15'，用于同一动物所有 crop 共享采集 spacing）；子串匹配时最长 key 优先。",
+    "version": "1.1",
     "units": "micrometers",
     "default": [1.114200, 1.065200, 2.0],
     "per_group": {
@@ -11,5 +11,9 @@
         "Sham_2nd": null,
         "Sham_3rd": null
     },
-    "per_sample": {}
+    "per_sample": {
+        "_note_zstep": "z 步长例外（采集时 z=1µm，非默认 2µm）。来源：实验室采集记录（backlog 2026-06-23）。A161_D15=xiaoqian ACTH_SAL；A427_D10=xiaoqian magraine NTG。XY 沿用默认 1.1142/1.0652。",
+        "A161_D15": [1.114200, 1.065200, 1.0],
+        "A427_D10": [1.114200, 1.065200, 1.0]
+    }
 }

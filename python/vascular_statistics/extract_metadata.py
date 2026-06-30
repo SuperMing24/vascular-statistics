@@ -180,8 +180,17 @@ def resolve_sample_spacing(
         return None, "none"
 
     per_sample = config.get("per_sample", {})
-    if sample_key in per_sample and per_sample[sample_key] is not None:
+    # 1) 精确匹配（完整 sample_key）
+    if sample_key in per_sample and isinstance(per_sample[sample_key], list):
         return per_sample[sample_key], "per_sample"
+    # 2) 子串匹配（key 为 sample_key 的子串，如动物-时间点 token "A161_D15"）——
+    #    用于「同一动物的所有 crop 共享采集 spacing」的例外。最长 key 优先（更具体）。
+    #    仅取值为 list 的条目（跳过 _note_* 等注释键）。
+    substr = [(k, v) for k, v in per_sample.items()
+              if isinstance(v, list) and k in sample_key]
+    if substr:
+        k, v = max(substr, key=lambda kv: len(kv[0]))
+        return v, "per_sample(substr)"
 
     per_group = config.get("per_group", {})
     if group in per_group and per_group[group] is not None:
