@@ -41,9 +41,9 @@ def _timing_from_path_parsed(parsed: Dict[str, Any]) -> Dict[str, Any]:
     study_day = parsed.get("study_day")
 
     if study_day is None and isinstance(study_day_label, str):
-        m = re.match(r"^D(\d+)$", study_day_label, re.IGNORECASE)
+        m = re.match(r"^D(\d+(?:\+\d+)*)$", study_day_label, re.IGNORECASE)
         if m:
-            study_day = int(m.group(1))
+            study_day = sum(int(part) for part in m.group(1).split("+"))
 
     return {
         "daypoint": daypoint,
@@ -59,9 +59,9 @@ def _sort_day(value: Any) -> int:
     if isinstance(value, int):
         return value
     if isinstance(value, str):
-        m = re.match(r"^D(\d+)$", value, re.IGNORECASE)
+        m = re.match(r"^D(\d+(?:\+\d+)*)$", value, re.IGNORECASE)
         if m:
-            return int(m.group(1))
+            return sum(int(part) for part in m.group(1).split("+"))
     return 10**9
 
 

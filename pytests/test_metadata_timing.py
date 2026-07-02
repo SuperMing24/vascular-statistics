@@ -44,3 +44,20 @@ def test_parse_xiaoqian_filename_timing():
         parsed["sample_key"]
         == "ACTH_angiogram/ACTH_HNK/20251222_A47_D15_angiogram_crop_100_165"
     )
+
+
+def test_parse_compound_study_day_label():
+    parsed = parse_sample_path(
+        (
+            "/data/magraine_angiogram/Saline/"
+            "20250914_A86_D9+10_angiogram_crop_77_149.mat"
+        ),
+        "/data",
+    )
+
+    assert parsed["batch_id"] == "A86"
+    assert parsed["daypoint"] == "D9+10"
+    assert parsed["study_day"] == 19
+    assert parsed["study_day_label"] == "D9+10"
+    assert parsed["timepoint_id"] == "20250914_D9+10"
+    assert parsed["source_time_token"] == "20250914_A86_D9+10"

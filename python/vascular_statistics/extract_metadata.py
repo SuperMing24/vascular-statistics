@@ -44,10 +44,10 @@ def discover_mat_files(
 # ═══════════════════════════════════════════════════════════════════════
 
 _TIME_TOKEN_RE = re.compile(
-    r"(?P<date>\d{8})_(?P<batch>[A-Z][A-Z0-9]*)_(?P<day>D\d+)",
+    r"(?P<date>\d{8})_(?P<batch>[A-Z][A-Z0-9]*)_(?P<day>D\d+(?:\+\d+)*)",
     re.IGNORECASE,
 )
-_DAY_RE = re.compile(r"^D(?P<day>\d+)$", re.IGNORECASE)
+_DAY_RE = re.compile(r"^D(?P<day>\d+(?:\+\d+)*)$", re.IGNORECASE)
 
 
 def _format_acquisition_date(date_token: str) -> str:
@@ -85,7 +85,7 @@ def parse_subject_timing(parts: Tuple[str, ...], filename_stem: str) -> Dict[str
     study_day = None
     m_day = _DAY_RE.match(study_day_label)
     if m_day:
-        study_day = int(m_day.group("day"))
+        study_day = sum(int(part) for part in m_day.group("day").split("+"))
 
     acquisition_date = (
         _format_acquisition_date(date_token)
