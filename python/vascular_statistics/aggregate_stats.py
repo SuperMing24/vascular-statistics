@@ -18,7 +18,20 @@ from typing import Any, Dict, List, Optional, Tuple
 # ═══════════════════════════════════════════════════════════════════════
 
 # 子范围文件后缀常量（避免循环导入，与 subrange_stats.py 保持同步）
+SUFFIX_D0_10 = "_d0-10um"
 SUFFIX_D10_PLUS = "_d10+um"
+
+_SUMMARY_LABELS = {
+    "": "全量 full",
+    SUFFIX_D0_10: "直径 0-10 um",
+    SUFFIX_D10_PLUS: "直径 >=10 um",
+}
+
+_SUMMARY_FILENAMES = {
+    "": "cross_sample_summary_full.txt",
+    SUFFIX_D0_10: "cross_sample_summary_d0-10um.txt",
+    SUFFIX_D10_PLUS: "cross_sample_summary_d10+um.txt",
+}
 
 
 def parse_run_statistics(run_dir: str, suffix: str = "") -> Optional[Dict[str, Any]]:
@@ -410,6 +423,36 @@ def write_aggregate_stats(
 # 批量编排
 # ═══════════════════════════════════════════════════════════════════════
 
+def scan_sample_keys(output_root: str) -> List[str]:
+    """扫描输出根目录，返回含 run_* 子目录的样本键列表。"""
+    sample_keys: List[str] = []
+    if not os.path.isdir(output_root):
+        return sample_keys
+    for group in os.listdir(output_root):
+        group_dir = os.path.join(output_root, group)
+        if not os.path.isdir(group_dir):
+            continue
+        for date_dir in os.listdir(group_dir):
+            date_path = os.path.join(group_dir, date_dir)
+            if not os.path.isdir(date_path):
+                continue
+            for sample in os.listdir(date_path):
+                sample_path = os.path.join(date_path, sample)
+                if not os.path.isdir(sample_path):
+                    continue
+                has_runs = any(
+                    d.startswith("run_")
+                    for d in os.listdir(sample_path)
+                    if os.path.isdir(os.path.join(sample_path, d))
+                )
+                if has_runs:
+                    rel = os.path.relpath(
+                        sample_path, output_root
+                    ).replace("\\", "/")
+                    sample_keys.append(rel)
+    return sample_keys
+
+
 def run_aggregation(
     output_root: str,
     sample_keys: Optional[List[str]] = None,
@@ -427,34 +470,10 @@ def run_aggregation(
         {"processed": N, "skipped": N, "failed": N}
     """
     if sample_keys is None:
-        # 扫描全部含 run_* 子目录的样本
-        sample_keys = []
         if not os.path.isdir(output_root):
             return {"processed": 0, "skipped": 0, "failed": 0,
                     "error": "output_root 不存在"}
-        for group in os.listdir(output_root):
-            group_dir = os.path.join(output_root, group)
-            if not os.path.isdir(group_dir):
-                continue
-            for date_dir in os.listdir(group_dir):
-                date_path = os.path.join(group_dir, date_dir)
-                if not os.path.isdir(date_path):
-                    continue
-                for sample in os.listdir(date_path):
-                    sample_path = os.path.join(date_path, sample)
-                    if not os.path.isdir(sample_path):
-                        continue
-                    # 检查是否有 run_* 子目录
-                    has_runs = any(
-                        d.startswith("run_")
-                        for d in os.listdir(sample_path)
-                        if os.path.isdir(os.path.join(sample_path, d))
-                    )
-                    if has_runs:
-                        rel = os.path.relpath(
-                            sample_path, output_root
-                        ).replace("\\", "/")
-                        sample_keys.append(rel)
+        sample_keys = scan_sample_keys(output_root)
 
     processed = 0
     skipped = 0
@@ -475,3 +494,128 @@ def run_aggregation(
             print(f"  [FAIL] {sk}: {e}")
 
     return {"processed": processed, "skipped": skipped, "failed": failed}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 跨样本汇总
+# ═══════════════════════════════════════════════════════════════════════
+
+def generate_cross_sample_summary(
+    output_root: str,
+    *,
+    suffix: str = "",
+    sample_keys: Optional[List[str]] = None,
+    force: bool = False,
+) -> Optional[str]:
+    """生成跨样本统计汇总（full / d0-10um / d10+um）。
+
+    从每个样本的 run_* 统计重新聚合，不依赖样本级 statistics_summary*.txt
+    是否已存在；因此可在 run 级统计刷新后直接生成 root 级汇总。
+    """
+    if suffix not in _SUMMARY_FILENAMES:
+        raise ValueError(f"不支持的统计后缀: {suffix!r}")
+
+    if sample_keys is None:
+        sample_keys = scan_sample_keys(output_root)
+
+    rows: List[Dict[str, Any]] = []
+    failed = 0
+    for sk in sorted(sample_keys):
+        sample_dir = os.path.join(output_root, sk)
+        try:
+            agg = aggregate_sample_stats(sample_dir, suffix=suffix, force=force)
+        except Exception as exc:
+            failed += 1
+            print(f"  [FAIL] {sk}: {exc}")
+            continue
+        if agg is None:
+            continue
+
+        aggregates = agg.get("aggregates", {})
+
+        def _get_mean(key: str) -> Optional[float]:
+            entry = aggregates.get(key)
+            if entry is None:
+                return None
+            mean_v = entry.get("mean")
+            if mean_v is None or mean_v != mean_v:
+                return None
+            return float(mean_v)
+
+        avg_diameter = _get_mean("avg_diameter_um")
+        avg_length = _get_mean("avg_length_um")
+        seg_density = _get_mean("segment_density_per_mm3")
+        avg_tortuosity = _get_mean("avg_tortuosity_au")
+        segment_count = _get_mean("segment_count")
+
+        if avg_diameter is None:
+            continue
+
+        rows.append({
+            "sample_key": sk,
+            "group": agg.get("group", "?"),
+            "batch_id": agg.get("batch_id", "?"),
+            "daypoint": agg.get("daypoint", "?"),
+            "n_runs": agg.get("n_runs", 0),
+            "avg_diameter_um": avg_diameter,
+            "avg_length_um": avg_length or 0.0,
+            "segment_density_per_mm3": seg_density or 0.0,
+            "avg_tortuosity_au": avg_tortuosity or 0.0,
+            "segment_count": segment_count or 0.0,
+        })
+
+    if not rows:
+        return None
+
+    label = _SUMMARY_LABELS[suffix]
+    out_path = os.path.join(output_root, _SUMMARY_FILENAMES[suffix])
+    sep = "=" * 112
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(f"{sep}\n")
+        f.write(f"  Vascular_Statistics -- 跨样本统计汇总（{label}）\n")
+        f.write(f"{sep}\n")
+        f.write(f"  样本数: {len(rows)}\n")
+        f.write(f"  数据源: {output_root}\n")
+        f.write(f"  统计文件: statistics_summary{suffix}.txt\n")
+        if failed:
+            f.write(f"  聚合失败样本数: {failed}\n")
+        f.write(f"{sep}\n\n")
+
+        header = (
+            f"  {'样本':<50s} | {'组别':>16s} | {'批次':>8s} | {'时间点':>8s} "
+            f"| {'run数':>5s} | {'段数':>9s} | {'直径(um)':>10s} "
+            f"| {'长度(um)':>10s} | {'段密度':>10s} | {'弯曲度':>8s}"
+        )
+        f.write(header + "\n")
+        f.write("  " + "-" * (len(header) - 2) + "\n")
+
+        for row in rows:
+            key_display = row["sample_key"]
+            if len(key_display) > 49:
+                key_display = "..." + key_display[-46:]
+
+            f.write(
+                f"  {key_display:<50s} | {row['group']:>16s} "
+                f"| {row['batch_id']:>8s} | {row['daypoint']:>8s} "
+                f"| {row['n_runs']:>5} "
+                f"| {row['segment_count']:>9.1f} "
+                f"| {row['avg_diameter_um']:>10.4f} "
+                f"| {row['avg_length_um']:>10.4f} "
+                f"| {row['segment_density_per_mm3']:>10.4f} "
+                f"| {row['avg_tortuosity_au']:>8.5f}\n"
+            )
+
+        f.write("\n")
+        f.write(f"{sep}\n")
+        f.write(
+            "方法: 每个样本先聚合其 run_* 统计值，再汇总为跨样本视图。"
+            "指标列为样本级聚合均值。\n"
+        )
+        f.write(
+            "指标: 段数 / 平均直径(um) / 平均长度(um) / 段密度(seg/mm^3) / "
+            "平均弯曲度(a.u.)\n"
+        )
+        f.write(f"{sep}\n")
+
+    return out_path

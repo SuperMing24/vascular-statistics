@@ -860,6 +860,11 @@ from vascular_statistics.subrange_stats import (
 # CLI --range 取值 → SubRange 预设 / 聚合后缀
 _SUBRANGE_PRESETS = {"0-10": SUBRANGE_D0_10, "10+": SUBRANGE_D10_PLUS}
 _RANGE_SUFFIX = {"0-10": DIAMETER_SUFFIX, "10+": SUFFIX_D10_PLUS}
+_POPULATION_SUFFIX = {
+    "full": "",
+    "d0-10um": DIAMETER_SUFFIX,
+    "d10+um": SUFFIX_D10_PLUS,
+}
 
 
 @main.command("diameter-stats")
@@ -966,10 +971,11 @@ def diameter_summary_cmd(output_root, sample_key):
     示例：
       vascular-stats diameter-summary --output-root /share/home/sukm/experiments/vascstats
     """
-    from vascular_statistics.subrange_stats import generate_cross_sample_summary
+    from vascular_statistics.aggregate_stats import generate_cross_sample_summary
 
     sample_keys = [sample_key] if sample_key else None
-    result = generate_cross_sample_summary(output_root, sample_keys=sample_keys)
+    result = generate_cross_sample_summary(
+        output_root, suffix=DIAMETER_SUFFIX, sample_keys=sample_keys)
 
     if result:
         click.echo(f"跨样本次范围汇总已写入: {result}")
@@ -984,6 +990,42 @@ def diameter_summary_cmd(output_root, sample_key):
 def micro_summary_cmd(output_root, sample_key):
     """[已弃用] 请使用 diameter-summary。"""
     return diameter_summary_cmd(output_root, sample_key)
+
+
+@main.command("cross-sample-summary")
+@click.option("--output-root", type=click.Path(exists=True), required=True,
+              help="输出根目录（含样本子目录）")
+@click.option("--population", type=click.Choice(["full", "d0-10um", "d10+um"]),
+              default="full",
+              help="统计口径：full 全量 / d0-10um 小血管 / d10+um 大血管。")
+@click.option("--sample-key", default=None,
+              help="仅包含指定样本（缺省则全部）")
+@click.option("--force", is_flag=True, default=False,
+              help="强制汇总：即使跨 run 口径不一致也继续")
+def cross_sample_summary_cmd(output_root, population, sample_key, force):
+    """生成跨样本统计汇总（full / d0-10um / d10+um）。
+
+    需先运行对应的 aggregate-stats / aggregate-diameter-stats，或至少确保
+    run_* 目录中存在对应 statistics_summary{suffix}.txt。
+
+    示例：
+      vascular-stats cross-sample-summary --output-root ... --population full
+      vascular-stats cross-sample-summary --output-root ... --population d10+um
+    """
+    from vascular_statistics.aggregate_stats import generate_cross_sample_summary
+
+    sample_keys = [sample_key] if sample_key else None
+    result = generate_cross_sample_summary(
+        output_root,
+        suffix=_POPULATION_SUFFIX[population],
+        sample_keys=sample_keys,
+        force=force,
+    )
+
+    if result:
+        click.echo(f"跨样本统计汇总已写入: {result}")
+    else:
+        click.echo("无有效统计数据，未生成汇总文件。", err=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════
