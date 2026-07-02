@@ -44,6 +44,10 @@ def test_generate_cross_sample_summary_three_populations():
                         "group": "TEST_GROUP",
                         "batch_id": "A001",
                         "daypoint": "D0",
+                        "study_day": 0,
+                        "study_day_label": "D0",
+                        "acquisition_date": "2024-01-01",
+                        "timepoint_id": "20240101_D0",
                     },
                     "spatial": {"tissue_volume_mm3": 0.1},
                 },
@@ -83,6 +87,10 @@ def test_generate_cross_sample_summary_three_populations():
                 content = f.read()
             assert label in content
             assert "sample_001" in content
+            assert "研究日" in content
+            assert "采集日期" in content
+            assert "时间点ID" in content
+            assert "20240101_D0" in content
             assert expected_diameter in content
     finally:
         shutil.rmtree(tmpdir)

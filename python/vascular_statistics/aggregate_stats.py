@@ -34,6 +34,37 @@ _SUMMARY_FILENAMES = {
 }
 
 
+def _timing_from_path_parsed(parsed: Dict[str, Any]) -> Dict[str, Any]:
+    """从 metadata.path_parsed 取标准化时间字段，兼容旧 metadata。"""
+    daypoint = parsed.get("daypoint", "?")
+    study_day_label = parsed.get("study_day_label") or daypoint
+    study_day = parsed.get("study_day")
+
+    if study_day is None and isinstance(study_day_label, str):
+        m = re.match(r"^D(\d+)$", study_day_label, re.IGNORECASE)
+        if m:
+            study_day = int(m.group(1))
+
+    return {
+        "daypoint": daypoint,
+        "study_day": study_day,
+        "study_day_label": study_day_label,
+        "acquisition_date": parsed.get("acquisition_date", "?"),
+        "timepoint_id": parsed.get("timepoint_id", "?"),
+        "source_time_token": parsed.get("source_time_token", "?"),
+    }
+
+
+def _sort_day(value: Any) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        m = re.match(r"^D(\d+)$", value, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+    return 10**9
+
+
 def parse_run_statistics(run_dir: str, suffix: str = "") -> Optional[Dict[str, Any]]:
     """解析单个 run_* 目录中的统计数据。
 
@@ -225,6 +256,7 @@ def aggregate_sample_stats(
     # 兼容旧字段名 (animal_id) 与新字段名 (batch_id)
     parsed = sample_meta.get("path_parsed", {})
     batch_id = parsed.get("batch_id") or parsed.get("animal_id", "?")
+    timing = _timing_from_path_parsed(parsed)
 
     return {
         "sample_key": (
@@ -232,7 +264,7 @@ def aggregate_sample_stats(
         ),
         "group": parsed.get("group", "?"),
         "batch_id": batch_id,
-        "daypoint": parsed.get("daypoint", "?"),
+        **timing,
         "volume_mm3": volume_mm3,
         "n_runs": len(runs_data),
         "runs": runs_data,
@@ -266,7 +298,11 @@ def format_aggregate_stats(agg: Dict[str, Any], suffix: str = "") -> str:
     lines.append(f"样本:    {agg['sample_key']}")
     lines.append(
         f"组别:    {agg['group']}  |  批次: {agg['batch_id']}  "
-        f"|  时间点: {agg['daypoint']}"
+        f"|  研究日: {agg.get('study_day_label', agg.get('daypoint', '?'))}"
+    )
+    lines.append(
+        f"采集日期: {agg.get('acquisition_date', '?')}  "
+        f"|  时间点ID: {agg.get('timepoint_id', '?')}"
     )
     vol = agg.get("volume_mm3")
     if vol is not None:
@@ -556,6 +592,10 @@ def generate_cross_sample_summary(
             "group": agg.get("group", "?"),
             "batch_id": agg.get("batch_id", "?"),
             "daypoint": agg.get("daypoint", "?"),
+            "study_day": agg.get("study_day"),
+            "study_day_label": agg.get("study_day_label", agg.get("daypoint", "?")),
+            "acquisition_date": agg.get("acquisition_date", "?"),
+            "timepoint_id": agg.get("timepoint_id", "?"),
             "n_runs": agg.get("n_runs", 0),
             "avg_diameter_um": avg_diameter,
             "avg_length_um": avg_length or 0.0,
@@ -567,9 +607,19 @@ def generate_cross_sample_summary(
     if not rows:
         return None
 
+    rows.sort(
+        key=lambda row: (
+            str(row.get("group", "")),
+            _sort_day(row.get("study_day")),
+            str(row.get("acquisition_date", "")),
+            str(row.get("batch_id", "")),
+            str(row.get("sample_key", "")),
+        )
+    )
+
     label = _SUMMARY_LABELS[suffix]
     out_path = os.path.join(output_root, _SUMMARY_FILENAMES[suffix])
-    sep = "=" * 112
+    sep = "=" * 150
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(f"{sep}\n")
@@ -583,7 +633,8 @@ def generate_cross_sample_summary(
         f.write(f"{sep}\n\n")
 
         header = (
-            f"  {'样本':<50s} | {'组别':>16s} | {'批次':>8s} | {'时间点':>8s} "
+            f"  {'样本':<50s} | {'组别':>16s} | {'批次':>8s} "
+            f"| {'研究日':>6s} | {'采集日期':>10s} | {'时间点ID':>12s} "
             f"| {'run数':>5s} | {'段数':>9s} | {'直径(um)':>10s} "
             f"| {'长度(um)':>10s} | {'段密度':>10s} | {'弯曲度':>8s}"
         )
@@ -597,7 +648,10 @@ def generate_cross_sample_summary(
 
             f.write(
                 f"  {key_display:<50s} | {row['group']:>16s} "
-                f"| {row['batch_id']:>8s} | {row['daypoint']:>8s} "
+                f"| {row['batch_id']:>8s} "
+                f"| {row['study_day_label']:>6s} "
+                f"| {row['acquisition_date']:>10s} "
+                f"| {row['timepoint_id']:>12s} "
                 f"| {row['n_runs']:>5} "
                 f"| {row['segment_count']:>9.1f} "
                 f"| {row['avg_diameter_um']:>10.4f} "
@@ -611,6 +665,11 @@ def generate_cross_sample_summary(
         f.write(
             "方法: 每个样本先聚合其 run_* 统计值，再汇总为跨样本视图。"
             "指标列为样本级聚合均值。\n"
+        )
+        f.write(
+            "元数据: 批次=batch_id（Axxx 成像/实验批次，非动物编号）；"
+            "研究日=study_day_label；采集日期=acquisition_date；"
+            "时间点ID=YYYYMMDD_Dn，用于显示与追溯。排序按组别、研究日、采集日期、批次。\n"
         )
         f.write(
             "指标: 段数 / 平均直径(um) / 平均长度(um) / 段密度(seg/mm^3) / "

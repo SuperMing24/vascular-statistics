@@ -5,6 +5,7 @@
 
 import json
 import os
+import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -42,11 +43,77 @@ def discover_mat_files(
 # 路径解析
 # ═══════════════════════════════════════════════════════════════════════
 
+_TIME_TOKEN_RE = re.compile(
+    r"(?P<date>\d{8})_(?P<batch>[A-Z][A-Z0-9]*)_(?P<day>D\d+)",
+    re.IGNORECASE,
+)
+_DAY_RE = re.compile(r"^D(?P<day>\d+)$", re.IGNORECASE)
+
+
+def _format_acquisition_date(date_token: str) -> str:
+    """将 YYYYMMDD 转为 ISO 日期；异常时保留原值。"""
+    try:
+        return datetime.strptime(date_token, "%Y%m%d").date().isoformat()
+    except ValueError:
+        return date_token
+
+
+def parse_subject_timing(parts: Tuple[str, ...], filename_stem: str) -> Dict[str, Any]:
+    """解析批次与时间字段。
+
+    支持两种现有结构：
+      1. huaien: group/YYYYMMDD_Axxx_Dn/angiogram/angiogram_crop_x_y.mat
+      2. xiaoqian: exp/subgroup/YYYYMMDD_Axxx_Dn_angiogram_crop_x_y.mat
+    """
+    candidates = list(parts[:-1]) + [filename_stem]
+
+    source_time_token = "_unknown"
+    date_token = "_unknown"
+    batch_id = "_unknown"
+    study_day_label = "_unknown"
+
+    for candidate in candidates:
+        m = _TIME_TOKEN_RE.search(candidate)
+        if not m:
+            continue
+        date_token = m.group("date")
+        batch_id = m.group("batch")
+        study_day_label = m.group("day").upper()
+        source_time_token = f"{date_token}_{batch_id}_{study_day_label}"
+        break
+
+    study_day = None
+    m_day = _DAY_RE.match(study_day_label)
+    if m_day:
+        study_day = int(m_day.group("day"))
+
+    acquisition_date = (
+        _format_acquisition_date(date_token)
+        if date_token != "_unknown"
+        else "_unknown"
+    )
+    timepoint_id = (
+        f"{date_token}_{study_day_label}"
+        if date_token != "_unknown" and study_day_label != "_unknown"
+        else "_unknown"
+    )
+
+    return {
+        "batch_id": batch_id,
+        "daypoint": study_day_label,  # 兼容旧字段：等同 study_day_label
+        "study_day": study_day,
+        "study_day_label": study_day_label,
+        "acquisition_date": acquisition_date,
+        "timepoint_id": timepoint_id,
+        "source_time_token": source_time_token,
+    }
+
+
 def parse_sample_path(
     mat_path: str,
     data_root: str,
 ) -> Dict[str, Any]:
-    """从 .mat 文件路径中解析组别 / 动物 / 时间点 / 裁剪范围。"""
+    """从 .mat 文件路径中解析组别 / 批次 / 时间点 / 裁剪范围。"""
     try:
         rel = os.path.relpath(mat_path, data_root)
     except ValueError:
@@ -74,35 +141,25 @@ def parse_sample_path(
     if z_start is not None and z_end is not None:
         num_slices = z_end - z_start + 1
 
-    # 路径层级：group / date_animal_daypoint / [angiogram] / file
+    # 路径层级：group / date_batch_daypoint / [angiogram] / file
     # 过滤 stage dirs（从 batch.py 复用逻辑）
     meaningful = [d for d in parts[:-1] if d.lower() not in STAGE_DIRS]
 
     group = meaningful[0] if len(meaningful) > 0 else "_unknown"
     date_dir = meaningful[1] if len(meaningful) > 1 else "_unknown"
-
-    # date_dir 格式：YYYYMMDD_AXXX_DNN 或 YYYYMMDD_NT_DNN
-    animal_id = "_unknown"
-    daypoint = "_unknown"
-    if date_dir != "_unknown":
-        segments = date_dir.split("_")
-        if len(segments) >= 3:
-            # segments[0] = YYYYMMDD, segments[1] = AXXX or NT, segments[2] = DNN
-            animal_id = segments[1]
-            daypoint = segments[2]
+    timing = parse_subject_timing(parts, filename)
 
     sample_key = compute_sample_key(rel)
 
     return {
         "group": group,
-        "batch_id": animal_id,  # Axxx = 成像实验批次标识，非动物编号
-        "daypoint": daypoint,
         "date_dir": date_dir,
         "z_start": z_start,
         "z_end": z_end,
         "num_slices": num_slices,
         "sample_key": sample_key,
         "input_rel_path": rel.replace("\\", "/"),
+        **timing,
     }
 
 
@@ -264,7 +321,11 @@ def build_sample_catalog(
         samples_index[sk] = {
             "group": group,
             "batch_id": batch,
-            "daypoint": pp["daypoint"],
+            "daypoint": pp.get("daypoint", "?"),
+            "study_day": pp.get("study_day"),
+            "study_day_label": pp.get("study_day_label", pp.get("daypoint", "?")),
+            "acquisition_date": pp.get("acquisition_date", "?"),
+            "timepoint_id": pp.get("timepoint_id", "?"),
             "shape": meta["stack_properties"]["shape"],
             "foreground_voxel_count": meta["stack_properties"]["foreground_voxel_count"],
             "voxel_spacing_um": meta["spatial"]["voxel_spacing_um"],
@@ -381,6 +442,11 @@ def run_extraction(
                     "group": group,
                     "batch_id": parsed["batch_id"],
                     "daypoint": parsed["daypoint"],
+                    "study_day": parsed["study_day"],
+                    "study_day_label": parsed["study_day_label"],
+                    "acquisition_date": parsed["acquisition_date"],
+                    "timepoint_id": parsed["timepoint_id"],
+                    "source_time_token": parsed["source_time_token"],
                     "date_dir": parsed["date_dir"],
                     "z_start": parsed["z_start"],
                     "z_end": parsed["z_end"],
