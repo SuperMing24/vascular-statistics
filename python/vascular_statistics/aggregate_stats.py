@@ -33,6 +33,61 @@ _SUMMARY_FILENAMES = {
     SUFFIX_D10_PLUS: "cross_sample_summary_d10+um.txt",
 }
 
+_SUFFIX_POPULATION = {
+    "": "full",
+    SUFFIX_D0_10: "d0-10um",
+    SUFFIX_D10_PLUS: "d10+um",
+}
+
+_QC_STATUS_RANK = {"OK": 0, "WARN": 1, "FAIL": 2}
+
+
+def _read_run_anomaly_population(run_dir: str, population: str) -> Optional[Dict[str, Any]]:
+    path = os.path.join(run_dir, "skeleton_anomaly_summary.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("populations", {}).get(population)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _aggregate_anomaly_qc(runs_data: List[Dict[str, Any]], population: str) -> Dict[str, Any]:
+    entries: List[Dict[str, Any]] = []
+    for run in runs_data:
+        run_dir = run.get("run_dir")
+        if not run_dir:
+            continue
+        pop = _read_run_anomaly_population(run_dir, population)
+        if pop:
+            entries.append(pop)
+
+    if not entries:
+        return {"n_runs_with_qc": 0, "status": "NA"}
+
+    status = max(
+        (entry.get("status", "OK") for entry in entries),
+        key=lambda x: _QC_STATUS_RANK.get(x, 0),
+    )
+    violations = sorted({
+        item
+        for entry in entries
+        for item in entry.get("range_violations", [])
+    })
+    return {
+        "n_runs_with_qc": len(entries),
+        "status": status,
+        "max_abs_ratio": max(float(entry.get("abs_ratio", 0.0)) for entry in entries),
+        "max_mad_ratio": max(float(entry.get("mad_ratio", 0.0)) for entry in entries),
+        "max_p99_ratio": max(float(entry.get("p99_ratio", 0.0)) for entry in entries),
+        "abs_outliers": sum(int(entry.get("abs_outliers", 0)) for entry in entries),
+        "mad_outliers": sum(int(entry.get("mad_outliers", 0)) for entry in entries),
+        "invalid_tortuosity": sum(int(entry.get("invalid_tortuosity", 0)) for entry in entries),
+        "range_violations": violations,
+    }
+
 
 def _timing_from_path_parsed(parsed: Dict[str, Any]) -> Dict[str, Any]:
     """从 metadata.path_parsed 取标准化时间字段，兼容旧 metadata。"""
@@ -130,6 +185,7 @@ def parse_run_statistics(run_dir: str, suffix: str = "") -> Optional[Dict[str, A
             pass
 
     return {
+        "run_dir": run_dir,
         "run_id": run_meta.get("run_id", os.path.basename(run_dir)),
         "job_id": run_meta.get("job_id", "?"),
         "node": run_meta.get("slurm_node", "?"),
@@ -257,6 +313,8 @@ def aggregate_sample_stats(
     parsed = sample_meta.get("path_parsed", {})
     batch_id = parsed.get("batch_id") or parsed.get("animal_id", "?")
     timing = _timing_from_path_parsed(parsed)
+    population = _SUFFIX_POPULATION.get(suffix, "full")
+    anomaly_qc = _aggregate_anomaly_qc(runs_data, population)
 
     return {
         "sample_key": (
@@ -270,6 +328,8 @@ def aggregate_sample_stats(
         "runs": runs_data,
         "aggregates": aggregates,
         "metric_keys": metric_keys,
+        "anomaly_population": population,
+        "anomaly_qc": anomaly_qc,
     }
 
 
@@ -386,6 +446,32 @@ def format_aggregate_stats(agg: Dict[str, Any], suffix: str = "") -> str:
                 f"  {label_full:<28s} | {_fmt(mean_v)}"
             )
     lines.append("")
+
+    qc = agg.get("anomaly_qc", {})
+    if qc.get("n_runs_with_qc", 0) > 0:
+        violations = qc.get("range_violations") or []
+        violation_text = ", ".join(violations) if violations else "-"
+        lines.append(f"--- 骨架异常诊断（{agg.get('anomaly_population', 'full')}）---")
+        lines.append(
+            f"QC状态: {qc.get('status', 'NA')}  "
+            f"| 含QC的run: {qc.get('n_runs_with_qc', 0)}/{agg.get('n_runs', 0)}"
+        )
+        lines.append(
+            f"最大超绝对阈值段比例: {qc.get('max_abs_ratio', 0.0):.4f}%  "
+            f"| 最大MAD离群段比例: {qc.get('max_mad_ratio', 0.0):.4f}%  "
+            f"| 最大P99离群段比例: {qc.get('max_p99_ratio', 0.0):.4f}%"
+        )
+        lines.append(
+            f"超长段总数: {qc.get('abs_outliers', 0)}  "
+            f"| MAD离群段总数: {qc.get('mad_outliers', 0)}  "
+            f"| inf/NaN弯曲度段总数: {qc.get('invalid_tortuosity', 0)}"
+        )
+        lines.append(f"范围违规: {violation_text}")
+        lines.append(
+            "明细: 各 run 的 skeleton_anomaly_summary.*、"
+            "skeleton_segment_anomalies.tsv、skeleton_edge_anomalies.tsv"
+        )
+        lines.append("")
 
     # 段密度说明
     density_entry = aggregates.get("segment_density_per_mm3", {})
@@ -602,6 +688,9 @@ def generate_cross_sample_summary(
             "segment_density_per_mm3": seg_density or 0.0,
             "avg_tortuosity_au": avg_tortuosity or 0.0,
             "segment_count": segment_count or 0.0,
+            "qc_status": agg.get("anomaly_qc", {}).get("status", "NA"),
+            "qc_abs_ratio": agg.get("anomaly_qc", {}).get("max_abs_ratio", 0.0),
+            "qc_mad_ratio": agg.get("anomaly_qc", {}).get("max_mad_ratio", 0.0),
         })
 
     if not rows:
@@ -635,7 +724,8 @@ def generate_cross_sample_summary(
         header = (
             f"  {'样本':<50s} | {'组别':>16s} | {'批次':>8s} "
             f"| {'研究日':>6s} | {'采集日期':>10s} | {'时间点ID':>12s} "
-            f"| {'run数':>5s} | {'段数':>9s} | {'直径(um)':>10s} "
+            f"| {'run数':>5s} | {'QC':>4s} | {'超长%':>8s} | {'MAD%':>8s} "
+            f"| {'段数':>9s} | {'直径(um)':>10s} "
             f"| {'长度(um)':>10s} | {'段密度':>10s} | {'弯曲度':>8s}"
         )
         f.write(header + "\n")
@@ -653,6 +743,9 @@ def generate_cross_sample_summary(
                 f"| {row['acquisition_date']:>10s} "
                 f"| {row['timepoint_id']:>12s} "
                 f"| {row['n_runs']:>5} "
+                f"| {row['qc_status']:>4s} "
+                f"| {row['qc_abs_ratio']:>8.4f} "
+                f"| {row['qc_mad_ratio']:>8.4f} "
                 f"| {row['segment_count']:>9.1f} "
                 f"| {row['avg_diameter_um']:>10.4f} "
                 f"| {row['avg_length_um']:>10.4f} "
@@ -675,6 +768,11 @@ def generate_cross_sample_summary(
             "指标: 段数 / 平均直径(um) / 平均长度(um) / 段密度(seg/mm^3) / "
             "平均弯曲度(a.u.)\n"
         )
+        f.write(
+            "QC: 读取各 run 的 skeleton_anomaly_summary.json；"
+            "QC 为最严重状态，超长%/MAD% 为该样本各 run 的最大比例。\n"
+        )
         f.write(f"{sep}\n")
 
     return out_path
+

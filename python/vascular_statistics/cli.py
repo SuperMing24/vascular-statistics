@@ -850,6 +850,45 @@ def aggregate_stats_cmd(output_root, sample_key, force):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+
+@main.command("anomaly-stats")
+@click.option("--output-root", type=click.Path(exists=True), required=True,
+              help="输出根目录（含样本子目录）")
+@click.option("--sample-key", default=None,
+              help="仅处理指定样本（缺省则全部已完成骨架化的样本）")
+@click.option("--species", default="mouse_brain",
+              help="validation_ranges.json 中的物种键（默认 mouse_brain）")
+@click.option("--force", is_flag=True, default=False,
+              help="强制重写已存在的 skeleton_anomaly_summary.*")
+def anomaly_stats_cmd(output_root, sample_key, species, force):
+    """为每个 run 生成骨架异常诊断文件。
+
+    诊断覆盖 full / d0-10um / d10+um 三档，并输出：
+    skeleton_anomaly_summary.json / .txt、
+    skeleton_segment_anomalies.tsv、skeleton_edge_anomalies.tsv。
+
+    示例：
+      vascular-stats anomaly-stats --output-root /share/home/sukm/experiments/vascstats
+      vascular-stats anomaly-stats --output-root ... --sample-key "BCAS_1st/20241009_A192_D0/angiogram_crop_97_111"
+    """
+    from vascular_statistics.anomaly_stats import run_anomaly_stats
+
+    sample_keys = [sample_key] if sample_key else None
+    result = run_anomaly_stats(
+        output_root,
+        sample_keys=sample_keys,
+        species=species,
+        force=force,
+    )
+
+    click.echo()
+    click.echo(f"已处理: {result['processed']}, "
+               f"跳过(已有): {result['skipped']}, "
+               f"无明细: {result['no_result']}, "
+               f"失败: {result['failed']}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # 子范围统计命令（从 C++ 全量明细按直径档位派生）。旧名 micro-* 保留为别名。
 # ═══════════════════════════════════════════════════════════════════════
 
