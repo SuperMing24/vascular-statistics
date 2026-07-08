@@ -65,6 +65,11 @@ def _make_sample(tmpdir):
         for nid in range(1, 10):
             f.write(f"{nid} 0 {nid}.0 0.0 0.0 1.0\n")
 
+    _write_lines(
+        os.path.join(run_dir, "skeleton_edges.txt"),
+        ["1 2", "2 3", "4 5", "5 6", "7 8", "8 9"],
+    )
+
     return sample_dir, run_dir
 
 
@@ -116,3 +121,49 @@ def test_run_and_aggregate_anomaly_stats():
     finally:
         shutil.rmtree(tmpdir)
 
+
+def test_edge_topology_qc_flags_single_long_edge():
+    tmpdir = tempfile.mkdtemp()
+    try:
+        sample_dir, run_dir = _make_sample(tmpdir)
+        _write_lines(os.path.join(run_dir, "generate_vessel_path_length.txt"), [10.0, 20.0, 30.0])
+        with open(os.path.join(run_dir, "run_meta.json"), "w", encoding="utf-8") as f:
+            json.dump({"stats_unit_mode": "anisotropic", "stats_spacing_um": [1.0, 1.0, 1.0]}, f)
+        with open(os.path.join(run_dir, "skeleton_vertices.txt"), "w", encoding="utf-8") as f:
+            for nid in range(1, 10):
+                y = 150.0 if nid == 9 else float(nid)
+                f.write(f"{nid} 0 {y:.1f} 0.0 0.0 1.0\n")
+        _write_lines(
+            os.path.join(run_dir, "skeleton_edges.txt"),
+            ["1 2", "2 3", "4 5", "5 6", "7 8", "1 9"],
+        )
+
+        anomaly_path = write_run_anomaly_stats(run_dir, 0.1)
+        with open(anomaly_path, encoding="utf-8") as f:
+            data = json.load(f)
+
+        assert data["status"] == "FAIL"
+        assert data["edge_qc"]["status"] == "FAIL"
+        assert data["edge_qc"]["fail_edges"] >= 1
+        assert data["edge_qc"]["max_edge_length_um"] == 149.0
+
+        long_edge_path = os.path.join(run_dir, "skeleton_long_edges.tsv")
+        assert os.path.exists(long_edge_path)
+        with open(long_edge_path, encoding="utf-8") as f:
+            long_edge_content = f.read()
+        assert "FAIL" in long_edge_content
+        assert "edge_length_gt_100um" in long_edge_content
+        assert "1\t9" in long_edge_content
+
+        with open(os.path.join(run_dir, "skeleton_anomaly_summary.txt"), encoding="utf-8") as f:
+            summary_content = f.read()
+        assert "edge topology QC" in summary_content
+        assert "all_edges | FAIL" in summary_content
+
+        agg_path = write_aggregate_stats(sample_dir)
+        with open(agg_path, encoding="utf-8") as f:
+            agg_content = f.read()
+        assert "拓扑单边QC" in agg_content
+        assert "FAIL边: 1" in agg_content
+    finally:
+        shutil.rmtree(tmpdir)

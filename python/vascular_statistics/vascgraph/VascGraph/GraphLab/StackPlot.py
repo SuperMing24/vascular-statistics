@@ -11,6 +11,7 @@ from mayavi.tools.pipeline import scalar_field, surface, contour
 
 from VascGraph.Tools.CalcTools import *
 from mayavi import mlab 
+from VascGraph.GraphLab.StackDisplayTransform import display_stack_for_graph
 
 class StackPlotParam:
     
@@ -79,7 +80,7 @@ class StackPlot:
 
     def Update(self, array):
         try:
-            self.DataSource.scalar_data=array
+            self.DataSource.scalar_data=display_stack_for_graph(array)
             self.DataSource.update()
             self.Contour.update_data()
             self.__UpdateSurface()

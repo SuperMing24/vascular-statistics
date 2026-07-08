@@ -7,6 +7,7 @@
 
 诊断覆盖 full / d0-10um / d10+um 三档，标准复用现有子范围统计的
 P99、MAD(k=3.5)、绝对超长段阈值，以及 validation_ranges.json 的生理范围。
+另有 edge-level 拓扑 QC，专门检测两个骨架点之间的单边长跳连接。
 """
 
 from __future__ import annotations
@@ -31,6 +32,9 @@ from vascular_statistics.subrange_stats import (
 
 POPULATIONS = ("full", "d0-10um", "d10+um")
 STATUS_RANK = {"OK": 0, "WARN": 1, "FAIL": 2}
+EDGE_WARN_LENGTH_UM = 30.0
+EDGE_FAIL_LENGTH_UM = 100.0
+EDGE_FAIL_MEDIAN_RATIO = 50.0
 
 
 def _repo_root() -> Path:
@@ -64,6 +68,16 @@ def _p99_threshold(values: List[float]) -> float:
         idx99 = len(ordered) - 1
     return ordered[idx99]
 
+
+
+def _percentile_threshold(values: List[float], percentile: float) -> float:
+    if not values:
+        return float("nan")
+    ordered = sorted(values)
+    idx = int(percentile / 100.0 * len(ordered))
+    if idx >= len(ordered):
+        idx = len(ordered) - 1
+    return ordered[idx]
 
 def _mad_flags(values: List[float], k: float = MAD_K) -> List[bool]:
     if len(values) < 2:
@@ -163,6 +177,26 @@ def _read_vertices(run_dir: str) -> Dict[int, Tuple[float, float, float]]:
     return vertices
 
 
+
+def _read_edges(run_dir: str) -> List[Tuple[int, int]]:
+    path = os.path.join(run_dir, "skeleton_edges.txt")
+    if not os.path.exists(path):
+        return []
+    edges: List[Tuple[int, int]] = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                u = int(float(parts[0]))
+                v = int(float(parts[1]))
+                if u != v:
+                    edges.append((u, v))
+    except (OSError, ValueError):
+        return []
+    return edges
+
 def _edge_length_um(
     p1: Tuple[float, float, float],
     p2: Tuple[float, float, float],
@@ -192,6 +226,117 @@ def _read_spacing_from_meta(run_dir: str) -> Optional[List[float]]:
         return None
     return None
 
+
+
+def _compute_edge_qc(
+    run_dir: str,
+    *,
+    length_um_factor: float,
+) -> Dict[str, Any]:
+    vertices = _read_vertices(run_dir)
+    raw_edges = _read_edges(run_dir)
+    spacing = _read_spacing_from_meta(run_dir)
+    degrees: Dict[int, int] = {}
+    rows: List[Dict[str, Any]] = []
+
+    for u, v in raw_edges:
+        if u not in vertices or v not in vertices:
+            continue
+        degrees[u] = degrees.get(u, 0) + 1
+        degrees[v] = degrees.get(v, 0) + 1
+
+    all_lengths: List[float] = []
+    for u, v in raw_edges:
+        if u not in vertices or v not in vertices:
+            continue
+        p1 = vertices[u]
+        p2 = vertices[v]
+        dx = p1[0] - p2[0]
+        dy = p1[1] - p2[1]
+        dz = p1[2] - p2[2]
+        if spacing and len(spacing) == 3:
+            dx_um = dx * spacing[0]
+            dy_um = dy * spacing[1]
+            dz_um = dz * spacing[2]
+            length_um = math.sqrt(dx_um * dx_um + dy_um * dy_um + dz_um * dz_um)
+        else:
+            dx_um = dx * length_um_factor
+            dy_um = dy * length_um_factor
+            dz_um = dz * length_um_factor
+            length_um = math.sqrt(dx_um * dx_um + dy_um * dy_um + dz_um * dz_um)
+        all_lengths.append(length_um)
+        rows.append({
+            "edge_u": u,
+            "edge_v": v,
+            "edge_length_um": length_um,
+            "dx_um": dx_um,
+            "dy_um": dy_um,
+            "dz_um": dz_um,
+            "degree_u": degrees.get(u, 0),
+            "degree_v": degrees.get(v, 0),
+        })
+
+    if not rows:
+        return {
+            "status": "NA",
+            "n_edges": 0,
+            "rows": [],
+        }
+
+    median_len = _safe_median(all_lengths)
+    p99_len = _percentile_threshold(all_lengths, 99.0)
+    p999_len = _percentile_threshold(all_lengths, 99.9)
+
+    fail_edges = 0
+    warn_edges = 0
+    for row in rows:
+        length_um = float(row["edge_length_um"])
+        median_ratio = length_um / median_len if median_len and median_len == median_len else float("nan")
+        reasons: List[str] = []
+        severity = "OK"
+        if length_um > EDGE_FAIL_LENGTH_UM:
+            reasons.append("edge_length_gt_100um")
+            severity = "FAIL"
+        if median_ratio == median_ratio and median_ratio > EDGE_FAIL_MEDIAN_RATIO:
+            reasons.append("edge_length_gt_50x_median")
+            severity = "FAIL"
+        if severity != "FAIL" and length_um > EDGE_WARN_LENGTH_UM:
+            reasons.append("edge_length_gt_30um")
+            severity = "WARN"
+        if severity == "OK" and length_um > p999_len:
+            reasons.append("edge_length_gt_p99.9")
+            severity = "INFO"
+        row["median_ratio"] = median_ratio
+        row["severity"] = severity
+        row["reasons"] = ",".join(reasons) if reasons else "-"
+        if severity == "FAIL":
+            fail_edges += 1
+        elif severity == "WARN":
+            warn_edges += 1
+
+    status = "FAIL" if fail_edges else ("WARN" if warn_edges else "OK")
+    flagged_rows = [r for r in rows if r["severity"] != "OK"]
+    flagged_rows.sort(
+        key=lambda r: (STATUS_RANK.get(r["severity"], 0), float(r["edge_length_um"])),
+        reverse=True,
+    )
+    rows.sort(key=lambda r: float(r["edge_length_um"]), reverse=True)
+
+    return {
+        "status": status,
+        "n_edges": len(rows),
+        "max_edge_length_um": rows[0]["edge_length_um"],
+        "median_edge_length_um": median_len,
+        "p99_edge_length_um": p99_len,
+        "p999_edge_length_um": p999_len,
+        "warn_length_threshold_um": EDGE_WARN_LENGTH_UM,
+        "fail_length_threshold_um": EDGE_FAIL_LENGTH_UM,
+        "fail_median_ratio_threshold": EDGE_FAIL_MEDIAN_RATIO,
+        "fail_edges": fail_edges,
+        "warn_edges": warn_edges,
+        "flagged_edges": len(flagged_rows),
+        "rows": flagged_rows,
+    }
 
 def compute_run_anomaly_stats(
     run_dir: str,
@@ -286,13 +431,17 @@ def compute_run_anomaly_stats(
                 entry = segment_reasons.setdefault(seg_i, {})
                 entry[pop] = reasons
 
+    edge_qc = _compute_edge_qc(run_dir, length_um_factor=length_um_factor)
+    status_candidates = [pop_data["status"] for pop_data in populations.values()]
+    if edge_qc.get("status") in STATUS_RANK:
+        status_candidates.append(edge_qc["status"])
     worst = max(
-        (pop_data["status"] for pop_data in populations.values()),
+        status_candidates,
         key=lambda s: STATUS_RANK.get(s, 0),
     )
 
     return {
-        "version": "1.0",
+        "version": "1.1",
         "run_dir": os.path.abspath(run_dir),
         "stats_unit_mode": mode,
         "r_scale": r_scale,
@@ -300,6 +449,7 @@ def compute_run_anomaly_stats(
         "volume_mm3": volume,
         "status": worst,
         "populations": populations,
+        "edge_qc": {k: v for k, v in edge_qc.items() if k != "rows"},
         "segments": {
             "radii": radii,
             "diameters_um": diameters_um,
@@ -308,6 +458,7 @@ def compute_run_anomaly_stats(
             "node_sequences": node_sequences,
             "reasons": segment_reasons,
         },
+        "edge_qc_rows": edge_qc.get("rows", []),
     }
 
 
@@ -348,9 +499,11 @@ def write_run_anomaly_stats(
     txt_path = os.path.join(run_dir, "skeleton_anomaly_summary.txt")
     seg_tsv_path = os.path.join(run_dir, "skeleton_segment_anomalies.tsv")
     edge_tsv_path = os.path.join(run_dir, "skeleton_edge_anomalies.tsv")
+    long_edge_tsv_path = os.path.join(run_dir, "skeleton_long_edges.tsv")
 
     public_stats = dict(stats)
     segments = public_stats.pop("segments")
+    long_edge_rows = public_stats.pop("edge_qc_rows", [])
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(_json_safe(public_stats), f, indent=2, ensure_ascii=False, allow_nan=False)
 
@@ -373,10 +526,23 @@ def write_run_anomaly_stats(
             f"{pdata['abs_ratio']:.4f} | {pdata['mad_ratio']:.4f} | "
             f"{pdata['p99_ratio']:.4f} | {pdata['invalid_tortuosity']} | {violations}"
         )
+    eqc = stats.get("edge_qc", {})
     lines.extend([
         "",
-        "判据: 绝对超长段比例 >1% => FAIL；生理范围违规或存在离群/无效弯曲度 => WARN。",
-        "明细: skeleton_segment_anomalies.tsv / skeleton_edge_anomalies.tsv",
+        "edge topology QC | QC | 边数 | 最长单边(um) | 中位单边(um) | P99.9单边(um) | FAIL边 | WARN边",
+        "-" * 102,
+        (
+            f"all_edges | {eqc.get('status', 'NA')} | {eqc.get('n_edges', 0)} | "
+            f"{_format_float(eqc.get('max_edge_length_um'), 4)} | "
+            f"{_format_float(eqc.get('median_edge_length_um'), 4)} | "
+            f"{_format_float(eqc.get('p999_edge_length_um'), 4)} | "
+            f"{eqc.get('fail_edges', 0)} | {eqc.get('warn_edges', 0)}"
+        ),
+        "",
+        "判据: 段级QC用于生理统计；单边拓扑QC独立扫描全部 skeleton_edges。",
+        "段级: 绝对超长段比例 >1% => FAIL；生理范围违规或存在离群/无效弯曲度 => WARN。",
+        "单边: >100um 或 >50x median => FAIL；>30um => WARN。",
+        "明细: skeleton_segment_anomalies.tsv / skeleton_edge_anomalies.tsv / skeleton_long_edges.tsv",
         "",
     ])
     with open(txt_path, "w", encoding="utf-8") as f:
@@ -459,6 +625,24 @@ def write_run_anomaly_stats(
             out["segment_length_um"] = _format_float(out["segment_length_um"], 6)
             writer.writerow(out)
 
+    with open(long_edge_tsv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "edge_u", "edge_v", "severity", "reasons", "edge_length_um",
+                "median_ratio", "dx_um", "dy_um", "dz_um", "degree_u", "degree_v",
+            ],
+            delimiter="\t",
+        )
+        writer.writeheader()
+        for row in long_edge_rows:
+            out = dict(row)
+            out["edge_length_um"] = _format_float(out["edge_length_um"], 6)
+            out["median_ratio"] = _format_float(out["median_ratio"], 6)
+            out["dx_um"] = _format_float(out["dx_um"], 6)
+            out["dy_um"] = _format_float(out["dy_um"], 6)
+            out["dz_um"] = _format_float(out["dz_um"], 6)
+            writer.writerow(out)
     return json_path
 
 
@@ -536,5 +720,4 @@ def run_anomaly_stats(
         "no_result": no_result,
         "failed": failed,
     }
-
 

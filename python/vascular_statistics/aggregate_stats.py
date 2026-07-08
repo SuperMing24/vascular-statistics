@@ -54,8 +54,21 @@ def _read_run_anomaly_population(run_dir: str, population: str) -> Optional[Dict
         return None
 
 
+
+def _read_run_anomaly_edge_qc(run_dir: str) -> Optional[Dict[str, Any]]:
+    path = os.path.join(run_dir, "skeleton_anomaly_summary.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("edge_qc")
+    except (OSError, json.JSONDecodeError):
+        return None
+
 def _aggregate_anomaly_qc(runs_data: List[Dict[str, Any]], population: str) -> Dict[str, Any]:
     entries: List[Dict[str, Any]] = []
+    edge_entries: List[Dict[str, Any]] = []
     for run in runs_data:
         run_dir = run.get("run_dir")
         if not run_dir:
@@ -63,31 +76,60 @@ def _aggregate_anomaly_qc(runs_data: List[Dict[str, Any]], population: str) -> D
         pop = _read_run_anomaly_population(run_dir, population)
         if pop:
             entries.append(pop)
+        edge_qc = _read_run_anomaly_edge_qc(run_dir)
+        if edge_qc:
+            edge_entries.append(edge_qc)
 
-    if not entries:
-        return {"n_runs_with_qc": 0, "status": "NA"}
+    if not entries and not edge_entries:
+        return {"n_runs_with_qc": 0, "n_runs_with_edge_qc": 0, "status": "NA"}
 
-    status = max(
-        (entry.get("status", "OK") for entry in entries),
-        key=lambda x: _QC_STATUS_RANK.get(x, 0),
+    status_candidates = [entry.get("status", "OK") for entry in entries]
+    status_candidates.extend(
+        entry.get("status", "OK") for entry in edge_entries
+        if entry.get("status") in _QC_STATUS_RANK
     )
+    status = max(status_candidates or ["OK"], key=lambda x: _QC_STATUS_RANK.get(x, 0))
+    edge_status = max(
+        (entry.get("status", "OK") for entry in edge_entries),
+        key=lambda x: _QC_STATUS_RANK.get(x, 0),
+    ) if edge_entries else "NA"
     violations = sorted({
         item
         for entry in entries
         for item in entry.get("range_violations", [])
     })
-    return {
+
+    result = {
         "n_runs_with_qc": len(entries),
+        "n_runs_with_edge_qc": len(edge_entries),
         "status": status,
-        "max_abs_ratio": max(float(entry.get("abs_ratio", 0.0)) for entry in entries),
-        "max_mad_ratio": max(float(entry.get("mad_ratio", 0.0)) for entry in entries),
-        "max_p99_ratio": max(float(entry.get("p99_ratio", 0.0)) for entry in entries),
-        "abs_outliers": sum(int(entry.get("abs_outliers", 0)) for entry in entries),
-        "mad_outliers": sum(int(entry.get("mad_outliers", 0)) for entry in entries),
-        "invalid_tortuosity": sum(int(entry.get("invalid_tortuosity", 0)) for entry in entries),
+        "edge_status": edge_status,
+        "max_edge_length_um": max(
+            float(entry.get("max_edge_length_um", 0.0)) for entry in edge_entries
+        ) if edge_entries else 0.0,
+        "edge_fail_edges": sum(int(entry.get("fail_edges", 0)) for entry in edge_entries),
+        "edge_warn_edges": sum(int(entry.get("warn_edges", 0)) for entry in edge_entries),
         "range_violations": violations,
     }
-
+    if entries:
+        result.update({
+            "max_abs_ratio": max(float(entry.get("abs_ratio", 0.0)) for entry in entries),
+            "max_mad_ratio": max(float(entry.get("mad_ratio", 0.0)) for entry in entries),
+            "max_p99_ratio": max(float(entry.get("p99_ratio", 0.0)) for entry in entries),
+            "abs_outliers": sum(int(entry.get("abs_outliers", 0)) for entry in entries),
+            "mad_outliers": sum(int(entry.get("mad_outliers", 0)) for entry in entries),
+            "invalid_tortuosity": sum(int(entry.get("invalid_tortuosity", 0)) for entry in entries),
+        })
+    else:
+        result.update({
+            "max_abs_ratio": 0.0,
+            "max_mad_ratio": 0.0,
+            "max_p99_ratio": 0.0,
+            "abs_outliers": 0,
+            "mad_outliers": 0,
+            "invalid_tortuosity": 0,
+        })
+    return result
 
 def _timing_from_path_parsed(parsed: Dict[str, Any]) -> Dict[str, Any]:
     """从 metadata.path_parsed 取标准化时间字段，兼容旧 metadata。"""
@@ -448,13 +490,14 @@ def format_aggregate_stats(agg: Dict[str, Any], suffix: str = "") -> str:
     lines.append("")
 
     qc = agg.get("anomaly_qc", {})
-    if qc.get("n_runs_with_qc", 0) > 0:
+    if qc.get("n_runs_with_qc", 0) > 0 or qc.get("n_runs_with_edge_qc", 0) > 0:
         violations = qc.get("range_violations") or []
         violation_text = ", ".join(violations) if violations else "-"
         lines.append(f"--- 骨架异常诊断（{agg.get('anomaly_population', 'full')}）---")
         lines.append(
             f"QC状态: {qc.get('status', 'NA')}  "
-            f"| 含QC的run: {qc.get('n_runs_with_qc', 0)}/{agg.get('n_runs', 0)}"
+            f"| 含段级QC的run: {qc.get('n_runs_with_qc', 0)}/{agg.get('n_runs', 0)}  "
+            f"| 含单边QC的run: {qc.get('n_runs_with_edge_qc', 0)}/{agg.get('n_runs', 0)}"
         )
         lines.append(
             f"最大超绝对阈值段比例: {qc.get('max_abs_ratio', 0.0):.4f}%  "
@@ -465,6 +508,12 @@ def format_aggregate_stats(agg: Dict[str, Any], suffix: str = "") -> str:
             f"超长段总数: {qc.get('abs_outliers', 0)}  "
             f"| MAD离群段总数: {qc.get('mad_outliers', 0)}  "
             f"| inf/NaN弯曲度段总数: {qc.get('invalid_tortuosity', 0)}"
+        )
+        lines.append(
+            f"拓扑单边QC: {qc.get('edge_status', 'NA')}  "
+            f"| 最长单边: {qc.get('max_edge_length_um', 0.0):.4f} um  "
+            f"| FAIL边: {qc.get('edge_fail_edges', 0)}  "
+            f"| WARN边: {qc.get('edge_warn_edges', 0)}"
         )
         lines.append(f"范围违规: {violation_text}")
         lines.append(
@@ -691,6 +740,7 @@ def generate_cross_sample_summary(
             "qc_status": agg.get("anomaly_qc", {}).get("status", "NA"),
             "qc_abs_ratio": agg.get("anomaly_qc", {}).get("max_abs_ratio", 0.0),
             "qc_mad_ratio": agg.get("anomaly_qc", {}).get("max_mad_ratio", 0.0),
+            "qc_edge_max_um": agg.get("anomaly_qc", {}).get("max_edge_length_um", 0.0),
         })
 
     if not rows:
@@ -724,7 +774,7 @@ def generate_cross_sample_summary(
         header = (
             f"  {'样本':<50s} | {'组别':>16s} | {'批次':>8s} "
             f"| {'研究日':>6s} | {'采集日期':>10s} | {'时间点ID':>12s} "
-            f"| {'run数':>5s} | {'QC':>4s} | {'超长%':>8s} | {'MAD%':>8s} "
+            f"| {'run数':>5s} | {'QC':>4s} | {'超长%':>8s} | {'MAD%':>8s} | {'长边um':>8s} "
             f"| {'段数':>9s} | {'直径(um)':>10s} "
             f"| {'长度(um)':>10s} | {'段密度':>10s} | {'弯曲度':>8s}"
         )
@@ -746,6 +796,7 @@ def generate_cross_sample_summary(
                 f"| {row['qc_status']:>4s} "
                 f"| {row['qc_abs_ratio']:>8.4f} "
                 f"| {row['qc_mad_ratio']:>8.4f} "
+                f"| {row['qc_edge_max_um']:>8.2f} "
                 f"| {row['segment_count']:>9.1f} "
                 f"| {row['avg_diameter_um']:>10.4f} "
                 f"| {row['avg_length_um']:>10.4f} "
@@ -770,7 +821,8 @@ def generate_cross_sample_summary(
         )
         f.write(
             "QC: 读取各 run 的 skeleton_anomaly_summary.json；"
-            "QC 为最严重状态，超长%/MAD% 为该样本各 run 的最大比例。\n"
+            "QC 为最严重状态，超长%/MAD% 为该样本各 run 的最大比例；"
+            "长边um为各 run 的最长 skeleton_edges 单边长度。\n"
         )
         f.write(f"{sep}\n")
 
