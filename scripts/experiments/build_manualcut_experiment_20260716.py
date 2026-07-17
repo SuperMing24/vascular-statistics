@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the 149-sample axis-fixed experiment with manual bad-region cuts.
+"""Build the 145-sample axis-fixed experiment with manual bad-region cuts.
 
 The two source experiments are copied below separate experimenter namespaces;
 all paths inside each source root remain unchanged::
@@ -11,7 +11,7 @@ For 105 annotated samples this script copies the original MATLAB file to
 ``<sample>/manual_cut/polygonInfo.mat``, deletes skeleton nodes inside the bad
 XY polygon prisms (including their boundaries), deletes incident edges,
 relabels retained nodes to contiguous IDs, recomputes retained tissue volume,
-and reruns the existing statistics.  The other 44 samples are copied unchanged
+and reruns the existing statistics.  The other 40 samples are copied unchanged
 apart from a ``manual_cut/manual_cut_meta.json`` trace record.
 
 Dry run (read-only)::
@@ -20,7 +20,7 @@ Dry run (read-only)::
       --src xiaoqian=/share/home/sukm/experiments/vs_xiaoqian_croppedz_20260628_axisfix \
       --src huaien=/share/home/sukm/experiments/vs_huaien_croppedz_20260629_axisfix \
       --annotation-root /share/home/sukm/data/manual_cut_annotations_20260716 \
-      --dst-root /share/home/sukm/experiments/vs_croppedz149_axisfix_manualcut_20260716 \
+      --dst-root /share/home/sukm/experiments/vs_croppedz145_axisfix_manualcut_20260717 \
       --dry-run
 
 The non-dry run requires an absent destination root.  Source experiments are
@@ -71,7 +71,7 @@ from vascular_statistics.subrange_stats import (  # noqa: E402
 
 
 EXPECTED_EXPERIMENTERS = ("xiaoqian", "huaien")
-DEFAULT_EXPECTED_SAMPLES = 149
+DEFAULT_EXPECTED_SAMPLES = 145
 DEFAULT_EXPECTED_ANNOTATIONS = 105
 
 STALE_PATTERNS = (
