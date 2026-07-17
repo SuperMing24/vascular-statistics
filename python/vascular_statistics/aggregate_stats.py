@@ -6,6 +6,8 @@
 写入样本级目录的 statistics_summary.txt（与 sample_metadata.json 同级）。
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re

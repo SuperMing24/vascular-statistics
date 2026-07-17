@@ -3,6 +3,8 @@
 以及输出目录结构管理（sample_key 计算 / manifest 注册 / pending 过滤）。
 """
 
+from __future__ import annotations
+
 import json
 import os
 try:
