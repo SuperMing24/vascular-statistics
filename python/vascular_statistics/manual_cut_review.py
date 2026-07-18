@@ -20,7 +20,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 matplotlib.rcParams["font.sans-serif"] = [
-    "Noto Sans CJK SC", "Microsoft YaHei", "SimHei", "DejaVu Sans",
+    "Noto Sans CJK JP", "Noto Sans CJK SC", "Microsoft YaHei", "SimHei",
+    "DejaVu Sans",
 ]
 matplotlib.rcParams["axes.unicode_minus"] = False
 from matplotlib.collections import LineCollection
