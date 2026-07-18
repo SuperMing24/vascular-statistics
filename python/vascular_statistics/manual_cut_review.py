@@ -18,6 +18,11 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+matplotlib.rcParams["font.sans-serif"] = [
+    "Noto Sans CJK SC", "Microsoft YaHei", "SimHei", "DejaVu Sans",
+]
+matplotlib.rcParams["axes.unicode_minus"] = False
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
@@ -26,10 +31,11 @@ import numpy as np
 
 from vascular_statistics.manual_cut import (
     CutLayer,
+    POLYGON_INSIDE_DELETED,
+    POLYGON_INSIDE_RETAINED,
     _parse_pos,
-    bad_region_node_mask,
+    deleted_region_node_mask,
     load_cut_annotation,
-    points_in_polygon_including_boundary,
     polygon_pixel_mask,
 )
 
@@ -38,6 +44,14 @@ from vascular_statistics.manual_cut import (
 class GraphGeometry:
     positions_xyz: np.ndarray
     edges: np.ndarray
+
+
+@dataclass(frozen=True)
+class ReviewRegion:
+    name: str
+    start_frame: int
+    end_frame: int
+    layers: tuple[CutLayer, ...]
 
 
 @dataclass(frozen=True)
@@ -156,20 +170,58 @@ def _wrap_sample_key(sample_key: str, width: int) -> str:
     return "\n".join(wrapped)
 
 
+def _review_regions(layers: Sequence[CutLayer], depth: int) -> tuple[ReviewRegion, ...]:
+    """Split Z into intervals with a constant union of active polygons."""
+    if not layers:
+        return (ReviewRegion("全量保留", 1, depth, ()),)
+    boundaries = {1, depth + 1}
+    for layer in layers:
+        boundaries.add(layer.start_frame)
+        boundaries.add(layer.end_frame + 1)
+    ordered = sorted(boundaries)
+    regions: list[ReviewRegion] = []
+    for start, end_exclusive in zip(ordered, ordered[1:]):
+        end = end_exclusive - 1
+        active = tuple(
+            layer for layer in layers
+            if layer.start_frame <= start and layer.end_frame >= end
+        )
+        if active:
+            regions.append(ReviewRegion(
+                name="+".join(layer.name for layer in active),
+                start_frame=start,
+                end_frame=end,
+                layers=active,
+            ))
+    return tuple(regions)
+
+
 def _draw_mask(
     axis: Any,
     height: int,
     width: int,
-    polygon: Optional[np.ndarray],
+    region: ReviewRegion,
+    selection_semantics: str,
 ) -> np.ndarray:
-    mask = (
-        np.zeros((height, width), dtype=bool)
-        if polygon is None
-        else polygon_pixel_mask(height, width, polygon)
-    )
+    if not region.layers:
+        retained = np.ones((height, width), dtype=bool)
+    else:
+        selected = np.zeros((height, width), dtype=bool)
+        for layer in region.layers:
+            selected |= polygon_pixel_mask(
+                height,
+                width,
+                layer.polygon_xy,
+                include_boundary=selection_semantics == POLYGON_INSIDE_DELETED,
+            )
+        retained = (
+            selected
+            if selection_semantics == POLYGON_INSIDE_RETAINED
+            else ~selected
+        )
     rgba = np.empty((height, width, 4), dtype=float)
-    rgba[~mask] = (0.88, 0.96, 0.88, 1.0)
-    rgba[mask] = (1.0, 0.78, 0.74, 1.0)
+    rgba[retained] = (0.88, 0.96, 0.88, 1.0)
+    rgba[~retained] = (1.0, 0.78, 0.74, 1.0)
     axis.imshow(
         rgba,
         origin="upper",
@@ -177,7 +229,7 @@ def _draw_mask(
         interpolation="nearest",
         zorder=0,
     )
-    return mask
+    return retained
 
 
 def _edge_segments(geometry: GraphGeometry, in_z: np.ndarray) -> np.ndarray:
@@ -193,32 +245,22 @@ def _render_panel(
     axis: Any,
     source: GraphGeometry,
     result: GraphGeometry,
-    layer: Optional[CutLayer],
-    depth: int,
+    region: ReviewRegion,
+    all_layers: Sequence[CutLayer],
+    selection_semantics: str,
     height: int,
     width: int,
     run_name: str,
 ) -> None:
-    if layer is None:
-        name = "full volume"
-        start, end = 1, depth
-        polygon = None
-    else:
-        name = layer.name
-        start, end = layer.start_frame, layer.end_frame
-        polygon = layer.polygon_xy
-
-    pixel_mask = _draw_mask(axis, height, width, polygon)
+    start, end = region.start_frame, region.end_frame
+    retained_pixels = _draw_mask(
+        axis, height, width, region, selection_semantics
+    )
     source_in_z = _in_frame_range(source.positions_xyz, start, end)
     result_in_z = _in_frame_range(result.positions_xyz, start, end)
-    if polygon is None:
-        deleted_here = np.zeros(source.positions_xyz.shape[0], dtype=bool)
-    else:
-        deleted_here = np.zeros(source.positions_xyz.shape[0], dtype=bool)
-        candidates = np.flatnonzero(source_in_z)
-        deleted_here[candidates] = points_in_polygon_including_boundary(
-            source.positions_xyz[candidates, :2], polygon
-        )
+    deleted_here = source_in_z & deleted_region_node_mask(
+        source.positions_xyz, all_layers, selection_semantics
+    )
 
     source_points = source.positions_xyz[source_in_z, :2]
     if source_points.size:
@@ -245,23 +287,30 @@ def _render_panel(
             c="#0369a1", alpha=0.8, linewidths=0, zorder=5,
         )
 
-    if polygon is not None:
+    for layer in region.layers:
+        polygon = layer.polygon_xy
         closed = np.vstack((polygon, polygon[0]))
         axis.plot(closed[:, 0], closed[:, 1], color="#111827", linewidth=1.2, zorder=6)
         axis.scatter(
             polygon[:, 0], polygon[:, 1], s=22.0,
             c="#f59e0b", edgecolors="#111827", linewidths=0.5, zorder=7,
         )
+        multiple = len(region.layers) > 1
         for index, (x_value, y_value) in enumerate(polygon, start=1):
+            label = f"{layer.name}-{index}" if multiple else str(index)
             axis.annotate(
-                str(index), (x_value, y_value), xytext=(3, 3),
+                label, (x_value, y_value), xytext=(3, 3),
                 textcoords="offset points", fontsize=6, color="#111827", zorder=8,
             )
 
-    polygon_bounds = [] if polygon is None else [
-        float(np.min(polygon[:, 0])), float(np.max(polygon[:, 0])),
-        float(np.min(polygon[:, 1])), float(np.max(polygon[:, 1])),
-    ]
+    if region.layers:
+        polygons = np.vstack([layer.polygon_xy for layer in region.layers])
+        polygon_bounds = [
+            float(np.min(polygons[:, 0])), float(np.max(polygons[:, 0])),
+            float(np.min(polygons[:, 1])), float(np.max(polygons[:, 1])),
+        ]
+    else:
+        polygon_bounds = []
     xmin = min([-0.5] + ([polygon_bounds[0] - 0.5] if polygon_bounds else []))
     xmax = max([width - 0.5] + ([polygon_bounds[1] + 0.5] if polygon_bounds else []))
     ymin = min([-0.5] + ([polygon_bounds[2] - 0.5] if polygon_bounds else []))
@@ -269,18 +318,19 @@ def _render_panel(
     axis.set_xlim(xmin, xmax)
     axis.set_ylim(ymax, ymin)
     axis.set_aspect("equal", adjustable="box")
-    axis.set_xlabel("x (skeleton/image coordinate)", fontsize=8)
-    axis.set_ylabel("y (increases downward)", fontsize=8)
+    axis.set_xlabel("x（骨架/图像坐标）", fontsize=8)
+    axis.set_ylabel("y（向下递增）", fontsize=8)
     axis.tick_params(labelsize=7)
     axis.grid(color="#111827", alpha=0.12, linewidth=0.4)
-    axis.set_title(f"{run_name} | {name} | Z frames {start}-{end}", fontsize=9)
+    axis.set_title(
+        f"{run_name} | {region.name} | Z 帧 {start}-{end}", fontsize=9
+    )
 
-    bad_pixels = int(np.count_nonzero(pixel_mask))
     annotation = (
-        f"bad XY pixels: {bad_pixels:,}/{height * width:,}\n"
-        f"source nodes in Z: {int(np.count_nonzero(source_in_z)):,}\n"
-        f"deleted by this layer: {int(np.count_nonzero(deleted_here)):,}\n"
-        f"final nodes in Z: {int(np.count_nonzero(result_in_z)):,}"
+        f"保留 XY 像素：{int(np.count_nonzero(retained_pixels)):,}/{height * width:,}\n"
+        f"Z 范围源骨架点：{int(np.count_nonzero(source_in_z)):,}\n"
+        f"本范围删除骨架点：{int(np.count_nonzero(deleted_here)):,}\n"
+        f"Z 范围最终骨架点：{int(np.count_nonzero(result_in_z)):,}"
     )
     axis.text(
         0.01, 0.01, annotation, transform=axis.transAxes,
@@ -309,14 +359,33 @@ def render_sample_review(
     depth, height, width = _shape_dhw(sample_dir, meta)
     status = str(meta.get("status", ""))
 
-    if status == "bad_region_removed":
-        annotation_path = os.path.join(manual_dir, str(meta.get("annotation_file", "polygonInfo.mat")))
+    if status in ("bad_region_removed", "quality_region_retained"):
+        annotation_path = os.path.join(
+            manual_dir, str(meta.get("annotation_file", "polygonInfo.mat"))
+        )
         annotation = load_cut_annotation(annotation_path)
-        layers: Sequence[Optional[CutLayer]] = annotation.layers
+        all_layers = annotation.layers
+        default_semantics = (
+            POLYGON_INSIDE_DELETED
+            if status == "bad_region_removed"
+            else POLYGON_INSIDE_RETAINED
+        )
+        selection_semantics = str(
+            meta.get("selection_semantics", default_semantics)
+        )
+        if selection_semantics not in (
+            POLYGON_INSIDE_RETAINED, POLYGON_INSIDE_DELETED
+        ):
+            raise ValueError(
+                f"unknown selection semantics {selection_semantics!r}: {meta_path}"
+            )
+        regions = _review_regions(all_layers, depth)
         retention_fraction = float(meta["retention"]["retained_fraction"])
     elif status == "no_cut_keep_full":
         annotation = None
-        layers = (None,)
+        all_layers = ()
+        selection_semantics = POLYGON_INSIDE_RETAINED
+        regions = _review_regions((), depth)
         retention_fraction = 1.0
     else:
         raise ValueError(f"unknown manual cut status {status!r}: {meta_path}")
@@ -334,11 +403,10 @@ def render_sample_review(
         result = read_pajek_geometry(result_path)
         source_graphs[run_name] = source
         result_graphs[run_name] = result
-        if annotation is None:
-            expected = source.positions_xyz
-        else:
-            deleted = bad_region_node_mask(source.positions_xyz, annotation.layers)
-            expected = source.positions_xyz[~deleted]
+        deleted = deleted_region_node_mask(
+            source.positions_xyz, all_layers, selection_semantics
+        )
+        expected = source.positions_xyz[~deleted]
         run_matches[run_name] = _positions_match(expected, result.positions_xyz)
 
     if output_path is None:
@@ -349,46 +417,55 @@ def render_sample_review(
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     rows = len(run_names)
-    columns = len(layers)
+    columns = len(regions)
     figure, axes = plt.subplots(
         rows, columns,
         figsize=(max(6.0, 4.8 * columns), max(5.6, 4.5 * rows + 1.1)),
         squeeze=False,
     )
     for row, run_name in enumerate(run_names):
-        for column, layer in enumerate(layers):
+        for column, region in enumerate(regions):
             _render_panel(
-                axes[row, column], source_graphs[run_name], result_graphs[run_name],
-                layer, depth, height, width, run_name,
+                axes[row, column],
+                source_graphs[run_name],
+                result_graphs[run_name],
+                region,
+                all_layers,
+                selection_semantics,
+                height,
+                width,
+                run_name,
             )
 
     wrapped_sample_key = _wrap_sample_key(sample_key, width=max(60, 72 * columns))
     figure.text(
-        0.5, 0.985, "Manual cut coordinate audit",
+        0.5, 0.985, "人工裁剪坐标核查",
         ha="center", va="top", fontsize=12, fontweight="bold",
     )
     figure.text(
         0.5, 0.94, wrapped_sample_key,
         ha="center", va="top", fontsize=10, fontweight="bold",
     )
-    match_label = "MATCH" if all(run_matches.values()) else "MISMATCH"
+    match_label = "一致" if all(run_matches.values()) else "不一致"
     figure.text(
         0.5,
         0.125,
-        f"shape [D,H,W]={depth,height,width} | retained volume={retention_fraction:.2%}\n"
-        f"result vs computed retained positions: {match_label}",
+        f"shape [D,H,W]={depth,height,width} | 保留体积={retention_fraction:.2%}\n"
+        f"结果与计算保留坐标：{match_label}",
         ha="center",
         va="bottom",
         fontsize=9,
     )
     legend = [
-        Patch(facecolor="#e0f5e0", edgecolor="none", label="retained XY region"),
-        Patch(facecolor="#ffc7bd", edgecolor="none", label="bad XY region (deleted)"),
-        Line2D([], [], color="#6b7280", marker=".", linestyle="None", label="source nodes"),
-        Line2D([], [], color="#c62828", marker="x", linestyle="None", label="deleted nodes"),
-        Line2D([], [], color="#0369a1", marker=".", linestyle="-", label="final skeleton"),
-        Line2D([], [], color="#f59e0b", marker="o", markeredgecolor="#111827",
-               linestyle="-", label="polygon and selected points"),
+        Patch(facecolor="#e0f5e0", edgecolor="none", label="保留 XY 区域"),
+        Patch(facecolor="#ffc7bd", edgecolor="none", label="裁剪 XY 区域（已删除）"),
+        Line2D([], [], color="#6b7280", marker=".", linestyle="None", label="源骨架点"),
+        Line2D([], [], color="#c62828", marker="x", linestyle="None", label="已删除骨架点"),
+        Line2D([], [], color="#0369a1", marker=".", linestyle="-", label="最终骨架"),
+        Line2D(
+            [], [], color="#f59e0b", marker="o", markeredgecolor="#111827",
+            linestyle="-", label="多边形与人工选点",
+        ),
     ]
     figure.legend(
         handles=legend, loc="lower center", bbox_to_anchor=(0.5, 0.015),

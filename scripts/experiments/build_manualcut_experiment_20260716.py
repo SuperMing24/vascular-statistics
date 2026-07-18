@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the 145-sample axis-fixed experiment with manual bad-region cuts.
+"""Build the 145-sample axis-fixed experiment with manual quality-region cuts.
 
 The two source experiments are copied below separate experimenter namespaces;
 all paths inside each source root remain unchanged::
@@ -8,9 +8,9 @@ all paths inside each source root remain unchanged::
     DST/huaien/<relative path from huaien axisfix root>
 
 For 105 annotated samples this script copies the original MATLAB file to
-``<sample>/manual_cut/polygonInfo.mat``, deletes skeleton nodes inside the bad
-XY polygon prisms (including their boundaries), deletes incident edges,
-relabels retained nodes to contiguous IDs, recomputes retained tissue volume,
+``<sample>/manual_cut/polygonInfo.mat``, retains skeleton nodes strictly inside
+the union of selected XY polygon prisms, deletes polygon-boundary and exterior
+nodes plus their incident edges, recomputes retained tissue volume,
 and reruns the existing statistics.  The other 40 samples are copied unchanged
 apart from a ``manual_cut/manual_cut_meta.json`` trace record.
 
@@ -20,7 +20,7 @@ Dry run (read-only)::
       --src xiaoqian=/share/home/sukm/experiments/vs_xiaoqian_croppedz_20260628_axisfix \
       --src huaien=/share/home/sukm/experiments/vs_huaien_croppedz_20260629_axisfix \
       --annotation-root /share/home/sukm/data/manual_cut_annotations_20260716 \
-      --dst-root /share/home/sukm/experiments/vs_croppedz145_axisfix_manualcut_20260717 \
+      --dst-root /share/home/sukm/experiments/vs_croppedz145_axisfix_manualkeep_20260718 \
       --dry-run
 
 The non-dry run requires an absent destination root.  Source experiments are
@@ -56,6 +56,7 @@ from vascular_statistics.bridge import pajek_to_cpp_input  # noqa: E402
 from vascular_statistics.manual_cut import (  # noqa: E402
     CutAnnotation,
     GraphCutResult,
+    POLYGON_INSIDE_RETAINED,
     RetentionResult,
     compute_retention,
     cut_pajek_graph,
@@ -457,7 +458,7 @@ def rerun_statistics(
     if spacing is not None:
         run_meta.setdefault("stats_spacing_um", spacing)
     run_meta.setdefault("manual_cut_history", []).append({
-        "operation": "delete bad-region nodes and all incident edges; no re-skeletonization",
+        "operation": "retain polygon interiors by union; delete boundary/exterior nodes and incident edges; no re-skeletonization",
         "annotation_sha256": annotation_sha256,
         "previous_volume_mm3": previous_volume,
         "retained_volume_mm3": retained_volume_mm3,
@@ -476,12 +477,19 @@ def cut_run(
 ) -> GraphCutResult:
     pajek_path = os.path.join(run_dir, "skeleton.pajek")
     if dry_run:
-        return cut_pajek_graph(pajek_path, annotation.layers)
+        return cut_pajek_graph(
+            pajek_path, annotation.layers, selection_semantics=POLYGON_INSIDE_RETAINED
+        )
     if executable is None:
         raise ValueError("internal error: executable required for non-dry run")
     temporary = pajek_path + ".manualcut.tmp"
     try:
-        graph_result = cut_pajek_graph(pajek_path, annotation.layers, temporary)
+        graph_result = cut_pajek_graph(
+            pajek_path,
+            annotation.layers,
+            temporary,
+            selection_semantics=POLYGON_INSIDE_RETAINED,
+        )
         os.replace(temporary, pajek_path)
     finally:
         if os.path.exists(temporary):
@@ -503,9 +511,11 @@ def update_sample_metadata(
     metadata = load_json(path)
     metadata.setdefault("spatial", {})["tissue_volume_mm3"] = retained_volume
     metadata["manual_cut"] = {
-        "status": "bad_region_removed",
+        "status": "quality_region_retained",
+        "selection_semantics": POLYGON_INSIDE_RETAINED,
         "coordinate_convention": "polygonPosition - 0.5 -> canonical skeleton/image coordinates",
-        "polygon_boundary": "deleted",
+        "polygon_boundary": "deleted cut line",
+        "overlapping_polygons": "union retained within each Z frame",
         "z_convention": "MATLAB frames are 1-based inclusive; skeleton z frame centres are 0-based",
         "original_tissue_volume_mm3": original_volume,
         "retained_tissue_volume_mm3": retained_volume,
@@ -525,12 +535,13 @@ def annotation_meta(
     run_results: dict[str, GraphCutResult],
 ) -> dict[str, Any]:
     base: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "experimenter": sample.experimenter,
         "source_experiment_root": sample.source_root,
         "source_sample_relative_path": sample.relative_path,
         "destination_sample_key": sample.unified_key,
-        "status": "bad_region_removed" if record else "no_cut_keep_full",
+        "status": "quality_region_retained" if record else "no_cut_keep_full",
+        "selection_semantics": POLYGON_INSIDE_RETAINED if record else "full_volume_retained",
         "skeletonization": "reused from axisfix source; not rerun",
         "original_tissue_volume_mm3": original_volume,
         "retained_tissue_volume_mm3": retained_volume,
@@ -543,7 +554,8 @@ def annotation_meta(
             "annotation_sha256": record.annotation.sha256,
             "coordinate_convention": {
                 "xy": "stored MATLAB 0.5 means image/skeleton coordinate 0; subtract 0.5",
-                "polygon_boundary": "bad region; deleted",
+                "polygon_boundary": "cut line; deleted",
+                "overlapping_polygons": "union retained within each Z frame",
                 "z": "1-based inclusive MATLAB frame ranges; frame f centre is skeleton z=f-1",
             },
             "layers": layer_dicts(record.annotation.layers),
@@ -592,11 +604,11 @@ def update_experimenter_catalog(
 
 def write_manifest(destination_root: str, rows: Sequence[dict[str, Any]]) -> None:
     payload = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "generated_at": now_iso(),
         "experiment_root": destination_root,
         "total_samples": len(rows),
-        "annotated_samples": sum(row["status"] == "bad_region_removed" for row in rows),
+        "annotated_samples": sum(row["status"] == "quality_region_retained" for row in rows),
         "full_retained_samples": sum(row["status"] == "no_cut_keep_full" for row in rows),
         "samples": list(rows),
     }
@@ -753,7 +765,11 @@ def process(
             status = "no_cut_keep_full"
         else:
             shape = resolve_shape_dhw(sample, record.annotation)
-            retention = compute_retention(shape, record.annotation.layers)
+            retention = compute_retention(
+                shape,
+                record.annotation.layers,
+                selection_semantics=POLYGON_INSIDE_RETAINED,
+            )
             original_volume, retained_volume, _spacing = volume_values(sample, retention)
             run_results = {}
             for run_name in sample.run_names:
@@ -761,7 +777,7 @@ def process(
                 run_results[run_name] = cut_run(
                     run_dir, record.annotation, retained_volume, executable, dry_run
                 )
-            status = "bad_region_removed"
+            status = "quality_region_retained"
             cut_keys.append(sample.unified_key)
 
         deleted_nodes = sum(result.deleted_nodes for result in run_results.values())
@@ -814,7 +830,7 @@ def process(
             "deleted_edges": deleted_edges,
         })
 
-    cut_rows = [row for row in manifest_rows if row["status"] == "bad_region_removed"]
+    cut_rows = [row for row in manifest_rows if row["status"] == "quality_region_retained"]
     if any(row["retained_volume_mm3"] >= row["original_volume_mm3"] for row in cut_rows):
         raise ValueError("at least one annotated sample did not reduce retained volume")
     if dry_run:
@@ -831,7 +847,7 @@ def process(
         )
     write_manifest(destination_root, manifest_rows)
     write_json(os.path.join(destination_root, "manual_cut_experiment.json"), {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "created_at": now_iso(),
         "source_roots": sources,
         "annotation_input_root": os.path.abspath(annotation_root),
@@ -839,6 +855,9 @@ def process(
         "sample_count": len(samples),
         "annotated_sample_count": len(cut_rows),
         "full_retained_sample_count": len(samples) - len(cut_rows),
+        "selection_semantics": POLYGON_INSIDE_RETAINED,
+        "polygon_boundary": "deleted cut line",
+        "overlapping_polygons": "union retained within each Z frame",
         "old_results_preserved": True,
     })
     if not no_aggregate:

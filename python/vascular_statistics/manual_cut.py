@@ -1,9 +1,10 @@
-"""Manual bad-region removal for canonical ``[x, y, z]`` skeleton graphs.
+"""Manual quality-region retention for canonical ``[x, y, z]`` skeleton graphs.
 
 MATLAB polygon coordinates use the ROI convention observed in this experiment:
-``0.5`` denotes image/skeleton coordinate ``0``.  Polygons are therefore shifted
-by ``-0.5`` before testing skeleton nodes or image voxel centres.  Polygon
-boundaries are part of the bad region.
+``0.5`` denotes image/skeleton coordinate ``0``. Polygons are therefore shifted
+by ``-0.5`` before testing skeleton nodes or image voxel centres. Polygon
+boundaries are cut lines and are therefore deleted. Polygon interiors are the
+selected quality regions; overlapping selections are retained by union.
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ from scipy.io import loadmat
 
 COORDINATE_SHIFT = 0.5
 GEOMETRY_TOLERANCE = 1e-9
+POLYGON_INSIDE_RETAINED = "polygon_inside_retained"
+POLYGON_INSIDE_DELETED = "polygon_inside_deleted"
 
 
 @dataclass(frozen=True)
@@ -66,7 +69,8 @@ class RetentionResult:
     deleted_voxels: int
     retained_voxels: int
     retained_fraction: float
-    layer_deleted_xy_pixels: dict[str, int]
+    selection_semantics: str
+    layer_selected_xy_pixels: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -224,12 +228,12 @@ def load_cut_annotation(path: str) -> CutAnnotation:
     )
 
 
-def points_in_polygon_including_boundary(
+def _points_in_polygon_membership(
     points_xy: np.ndarray,
     polygon_xy: np.ndarray,
     tolerance: float = GEOMETRY_TOLERANCE,
-) -> np.ndarray:
-    """Return whether each point lies inside or on a simple polygon."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(inside_or_boundary, boundary)`` for a simple polygon."""
     points = np.asarray(points_xy, dtype=float)
     polygon = np.asarray(polygon_xy, dtype=float)
     if points.ndim != 2 or points.shape[1] != 2:
@@ -237,7 +241,8 @@ def points_in_polygon_including_boundary(
     if polygon.ndim != 2 or polygon.shape[1] != 2 or polygon.shape[0] < 3:
         raise ValueError("polygon_xy must be M x 2 with M >= 3")
     if points.shape[0] == 0:
-        return np.zeros(0, dtype=bool)
+        empty = np.zeros(0, dtype=bool)
+        return empty, empty
 
     px = points[:, 0]
     py = points[:, 1]
@@ -266,10 +271,39 @@ def points_in_polygon_including_boundary(
             x_intersection = ax + (py - ay) * dx / dy
             inside ^= crosses & (px < x_intersection)
 
-    return inside | boundary
+    return inside | boundary, boundary
 
 
-def polygon_pixel_mask(height: int, width: int, polygon_xy: np.ndarray) -> np.ndarray:
+def points_in_polygon_including_boundary(
+    points_xy: np.ndarray,
+    polygon_xy: np.ndarray,
+    tolerance: float = GEOMETRY_TOLERANCE,
+) -> np.ndarray:
+    """Return whether each point lies inside or on a simple polygon."""
+    inside_or_boundary, _ = _points_in_polygon_membership(
+        points_xy, polygon_xy, tolerance
+    )
+    return inside_or_boundary
+
+
+def points_strictly_inside_polygon(
+    points_xy: np.ndarray,
+    polygon_xy: np.ndarray,
+    tolerance: float = GEOMETRY_TOLERANCE,
+) -> np.ndarray:
+    """Return whether points are inside a polygon but not on its boundary."""
+    inside_or_boundary, boundary = _points_in_polygon_membership(
+        points_xy, polygon_xy, tolerance
+    )
+    return inside_or_boundary & ~boundary
+
+
+def polygon_pixel_mask(
+    height: int,
+    width: int,
+    polygon_xy: np.ndarray,
+    include_boundary: bool = True,
+) -> np.ndarray:
     """Rasterize a polygon against pixel centres ``x=0..W-1, y=0..H-1``."""
     if height <= 0 or width <= 0:
         raise ValueError("height and width must be positive")
@@ -283,7 +317,12 @@ def polygon_pixel_mask(height: int, width: int, polygon_xy: np.ndarray) -> np.nd
         return mask
     yy, xx = np.mgrid[ymin:ymax + 1, xmin:xmax + 1]
     points = np.column_stack((xx.ravel(), yy.ravel()))
-    local = points_in_polygon_including_boundary(points, polygon).reshape(xx.shape)
+    classifier = (
+        points_in_polygon_including_boundary
+        if include_boundary
+        else points_strictly_inside_polygon
+    )
+    local = classifier(points, polygon).reshape(xx.shape)
     mask[ymin:ymax + 1, xmin:xmax + 1] = local
     return mask
 
@@ -291,14 +330,19 @@ def polygon_pixel_mask(height: int, width: int, polygon_xy: np.ndarray) -> np.nd
 def compute_retention(
     shape_dhw: Sequence[int],
     layers: Sequence[CutLayer],
+    selection_semantics: str = POLYGON_INSIDE_RETAINED,
 ) -> RetentionResult:
-    """Count retained image voxels after the union of all bad-region prisms."""
+    """Count retained image voxels using explicit polygon semantics."""
     if len(shape_dhw) != 3:
         raise ValueError(f"shape must be [D,H,W], got {shape_dhw}")
     depth, height, width = (int(v) for v in shape_dhw)
     if min(depth, height, width) <= 0:
         raise ValueError(f"invalid shape: {shape_dhw}")
-    deleted = np.zeros((depth, height, width), dtype=bool)
+    if selection_semantics not in (POLYGON_INSIDE_RETAINED, POLYGON_INSIDE_DELETED):
+        raise ValueError(f"unknown selection semantics: {selection_semantics}")
+
+    selected = np.zeros((depth, height, width), dtype=bool)
+    active = np.zeros(depth, dtype=bool)
     layer_counts: dict[str, int] = {}
     for layer in layers:
         if layer.start_frame < 1 or layer.end_frame > depth:
@@ -306,9 +350,22 @@ def compute_retention(
                 f"{layer.name} frame range {layer.start_frame}..{layer.end_frame} "
                 f"is outside depth 1..{depth}"
             )
-        mask = polygon_pixel_mask(height, width, layer.polygon_xy)
+        mask = polygon_pixel_mask(
+            height,
+            width,
+            layer.polygon_xy,
+            include_boundary=selection_semantics == POLYGON_INSIDE_DELETED,
+        )
         layer_counts[layer.name] = int(np.count_nonzero(mask))
-        deleted[layer.start_frame - 1:layer.end_frame] |= mask
+        selected[layer.start_frame - 1:layer.end_frame] |= mask
+        active[layer.start_frame - 1:layer.end_frame] = True
+
+    if selection_semantics == POLYGON_INSIDE_RETAINED:
+        retained_mask = np.ones((depth, height, width), dtype=bool)
+        retained_mask[active] = selected[active]
+        deleted = ~retained_mask
+    else:
+        deleted = selected
     deleted_count = int(np.count_nonzero(deleted))
     total = depth * height * width
     retained = total - deleted_count
@@ -320,7 +377,8 @@ def compute_retention(
         deleted_voxels=deleted_count,
         retained_voxels=retained,
         retained_fraction=retained / total,
-        layer_deleted_xy_pixels=layer_counts,
+        selection_semantics=selection_semantics,
+        layer_selected_xy_pixels=layer_counts,
     )
 
 
@@ -337,31 +395,52 @@ def _parse_pos(value: Any) -> tuple[float, float, float]:
     return float(parts[0]), float(parts[1]), float(parts[2])
 
 
-def bad_region_node_mask(
+def deleted_region_node_mask(
     positions_xyz: np.ndarray,
     layers: Sequence[CutLayer],
+    selection_semantics: str = POLYGON_INSIDE_RETAINED,
 ) -> np.ndarray:
-    """Classify canonical XYZ nodes against 1-based inclusive Z layers.
+    """Classify deleted XYZ nodes against 1-based inclusive Z layers.
 
-    Frame ``f`` has centre ``z=f-1`` and extent ``[f-1.5, f-0.5]``.  This
+    Frame ``f`` has centre ``z=f-1`` and extent ``[f-1.5, f-0.5]``. This
     continuous slab also handles non-integer graph nodes produced by refinement.
     """
     positions = np.asarray(positions_xyz, dtype=float)
     if positions.ndim != 2 or positions.shape[1] != 3:
         raise ValueError("positions_xyz must be N x 3")
-    deleted = np.zeros(positions.shape[0], dtype=bool)
+    if selection_semantics not in (POLYGON_INSIDE_RETAINED, POLYGON_INSIDE_DELETED):
+        raise ValueError(f"unknown selection semantics: {selection_semantics}")
+
+    active = np.zeros(positions.shape[0], dtype=bool)
+    selected = np.zeros(positions.shape[0], dtype=bool)
     z = positions[:, 2]
     for layer in layers:
         zmin = layer.start_frame - 1.5
         zmax = layer.end_frame - 0.5
         in_z = (z >= zmin - GEOMETRY_TOLERANCE) & (z <= zmax + GEOMETRY_TOLERANCE)
-        candidates = np.flatnonzero(in_z & ~deleted)
+        active |= in_z
+        candidates = np.flatnonzero(in_z & ~selected)
         if candidates.size:
-            in_xy = points_in_polygon_including_boundary(
-                positions[candidates, :2], layer.polygon_xy
+            classifier = (
+                points_strictly_inside_polygon
+                if selection_semantics == POLYGON_INSIDE_RETAINED
+                else points_in_polygon_including_boundary
             )
-            deleted[candidates[in_xy]] = True
-    return deleted
+            in_xy = classifier(positions[candidates, :2], layer.polygon_xy)
+            selected[candidates[in_xy]] = True
+    if selection_semantics == POLYGON_INSIDE_RETAINED:
+        return active & ~selected
+    return selected
+
+
+def bad_region_node_mask(
+    positions_xyz: np.ndarray,
+    layers: Sequence[CutLayer],
+) -> np.ndarray:
+    """Return the legacy mask where polygon interiors represented bad regions."""
+    return deleted_region_node_mask(
+        positions_xyz, layers, selection_semantics=POLYGON_INSIDE_DELETED
+    )
 
 
 def _node_sort_key(node: Any) -> tuple[int, Any]:
@@ -375,15 +454,16 @@ def cut_pajek_graph(
     pajek_path: str,
     layers: Sequence[CutLayer],
     output_path: Optional[str] = None,
+    selection_semantics: str = POLYGON_INSIDE_RETAINED,
 ) -> GraphCutResult:
-    """Delete bad-region nodes and incident edges, then relabel survivors 0..N-1."""
+    """Delete unretained nodes and incident edges, then relabel survivors 0..N-1."""
     graph = nx.read_pajek(pajek_path)
     ordered_nodes = sorted(graph.nodes(), key=_node_sort_key)
     positions = np.asarray([
         _parse_pos(graph.nodes[node].get("pos", graph.nodes[node].get("Pos")))
         for node in ordered_nodes
     ])
-    delete_mask = bad_region_node_mask(positions, layers)
+    delete_mask = deleted_region_node_mask(positions, layers, selection_semantics)
     deleted_nodes = {node for node, delete in zip(ordered_nodes, delete_mask) if delete}
     retained_nodes = [node for node in ordered_nodes if node not in deleted_nodes]
     original_edges = graph.number_of_edges()

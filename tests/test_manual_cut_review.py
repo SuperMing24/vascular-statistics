@@ -14,8 +14,9 @@ from scipy.io import savemat
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
-from vascular_statistics.manual_cut import cut_pajek_graph
+from vascular_statistics.manual_cut import CutLayer, cut_pajek_graph
 from vascular_statistics.manual_cut_review import (
+    _review_regions,
     _wrap_sample_key,
     discover_manual_cut_metadata,
     read_pajek_geometry,
@@ -34,6 +35,18 @@ class ManualCutReviewTests(unittest.TestCase):
 
         self.assertIn("\n", wrapped)
         self.assertTrue(all(len(line) <= 60 for line in wrapped.splitlines()))
+
+    def test_splits_overlapping_layers_into_exact_union_regions(self):
+        polygon = np.asarray([[0, 0], [3, 0], [3, 3], [0, 3]], dtype=float)
+        p1 = CutLayer("p1", polygon, polygon + 0.5, 1, 2)
+        p2 = CutLayer("p2", polygon, polygon + 0.5, 2, 4)
+
+        regions = _review_regions((p1, p2), depth=5)
+
+        self.assertEqual(
+            [(region.name, region.start_frame, region.end_frame) for region in regions],
+            [("p1", 1, 1), ("p1+p2", 2, 2), ("p2", 3, 4)],
+        )
 
     def test_reads_empty_pajek_as_n_by_three_geometry(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -103,9 +116,10 @@ class ManualCutReviewTests(unittest.TestCase):
                 "source_experiment_root": source_root,
                 "source_sample_relative_path": relative.replace("\\", "/"),
                 "destination_sample_key": "operator/group/sample",
-                "status": "bad_region_removed",
+                "status": "quality_region_retained",
+                "selection_semantics": "polygon_inside_retained",
                 "annotation_file": "polygonInfo.mat",
-                "retention": {"shape_dhw": [1, 4, 4], "retained_fraction": 0.5},
+                "retention": {"shape_dhw": [1, 4, 4], "retained_fraction": 0.0625},
             }
             meta_path = os.path.join(manual_dir, "manual_cut_meta.json")
             with open(meta_path, "w", encoding="utf-8") as handle:
