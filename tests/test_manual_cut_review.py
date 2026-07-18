@@ -51,12 +51,17 @@ class ManualCutReviewTests(unittest.TestCase):
             experiment_root = os.path.join(tmp, "experiment")
             relative = os.path.join("group", "sample")
             run_name = "run_1"
+            backup_name = "_badz2_run_1"
             source_run = os.path.join(source_root, relative, run_name)
+            source_backup = os.path.join(source_root, relative, backup_name)
             result_sample = os.path.join(experiment_root, "operator", relative)
             result_run = os.path.join(result_sample, run_name)
+            result_backup = os.path.join(result_sample, backup_name)
             manual_dir = os.path.join(result_sample, "manual_cut")
             os.makedirs(source_run)
+            os.makedirs(source_backup)
             os.makedirs(result_run)
+            os.makedirs(result_backup)
             os.makedirs(manual_dir)
 
             graph = nx.Graph()
@@ -66,6 +71,8 @@ class ManualCutReviewTests(unittest.TestCase):
             source_pajek = os.path.join(source_run, "skeleton.pajek")
             result_pajek = os.path.join(result_run, "skeleton.pajek")
             nx.write_pajek(graph, source_pajek)
+            nx.write_pajek(graph, os.path.join(source_backup, "skeleton.pajek"))
+            nx.write_pajek(graph, os.path.join(result_backup, "skeleton.pajek"))
 
             polygon = np.asarray([
                 [0.5, 0.5], [2.5, 0.5], [2.5, 2.5], [0.5, 2.5],

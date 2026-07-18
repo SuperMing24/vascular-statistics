@@ -110,7 +110,7 @@ def _find_runs(sample_dir: str) -> list[str]:
     runs: list[str] = []
     for name in sorted(os.listdir(sample_dir)):
         run_dir = os.path.join(sample_dir, name)
-        if os.path.isdir(run_dir) and os.path.isfile(
+        if name.startswith("run_") and os.path.isdir(run_dir) and os.path.isfile(
             os.path.join(run_dir, "skeleton.pajek")
         ):
             runs.append(name)
