@@ -393,7 +393,34 @@ def _layout_review_figure(
     if bottom >= top:
         raise RuntimeError("review layout has no room for plot panels")
 
-    figure.tight_layout(rect=(0, bottom, 1, top))
+    for _ in range(4):
+        figure.tight_layout(rect=(0, bottom, 1, top))
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        panel_boxes = [
+            axis.get_tightbbox(renderer)
+            for axis in axes.flat
+            if axis.get_visible()
+        ]
+        bottom_shortfall = max(
+            0.0,
+            summary_artist.get_window_extent(renderer).y1
+            + gap_pixels
+            - min(box.y0 for box in panel_boxes),
+        )
+        top_shortfall = max(
+            0.0,
+            max(box.y1 for box in panel_boxes)
+            + gap_pixels
+            - sample_artist.get_window_extent(renderer).y0,
+        )
+        if bottom_shortfall < 0.5 and top_shortfall < 0.5:
+            break
+        bottom += (bottom_shortfall + 1.0) / figure_height
+        top -= (top_shortfall + 1.0) / figure_height
+        if bottom >= top:
+            raise RuntimeError("review layout has no room for plot panels")
+
     figure.canvas.draw()
     renderer = figure.canvas.get_renderer()
     boxes = {
