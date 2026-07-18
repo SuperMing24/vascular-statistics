@@ -15,15 +15,25 @@ import textwrap
 from typing import Any, Optional, Sequence
 
 import matplotlib
+from matplotlib import font_manager
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
-matplotlib.rcParams["font.sans-serif"] = [
-    "Noto Sans CJK JP", "Noto Sans CJK SC", "Microsoft YaHei", "SimHei",
-    "DejaVu Sans",
-]
+BUNDLED_CJK_FONT_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "assets",
+    "fonts",
+    "NotoSansCJKSC-ManualCutSubset.otf",
+)
+if not os.path.isfile(BUNDLED_CJK_FONT_PATH):
+    raise RuntimeError(f"bundled CJK review font is missing: {BUNDLED_CJK_FONT_PATH}")
+font_manager.fontManager.addfont(BUNDLED_CJK_FONT_PATH)
+BUNDLED_CJK_FONT_FAMILY = font_manager.FontProperties(
+    fname=BUNDLED_CJK_FONT_PATH
+).get_name()
+matplotlib.rcParams["font.family"] = [BUNDLED_CJK_FONT_FAMILY]
+matplotlib.rcParams["font.sans-serif"] = [BUNDLED_CJK_FONT_FAMILY]
 matplotlib.rcParams["axes.unicode_minus"] = False
+import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch

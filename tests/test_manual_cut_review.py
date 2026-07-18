@@ -6,16 +6,19 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import warnings
 
 import networkx as nx
 import numpy as np
 from scipy.io import savemat
+from matplotlib.ft2font import FT2Font
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
 from vascular_statistics.manual_cut import CutLayer, cut_pajek_graph
 from vascular_statistics.manual_cut_review import (
+    BUNDLED_CJK_FONT_PATH,
     _review_regions,
     _wrap_sample_key,
     discover_manual_cut_metadata,
@@ -25,6 +28,18 @@ from vascular_statistics.manual_cut_review import (
 
 
 class ManualCutReviewTests(unittest.TestCase):
+    def test_bundled_font_covers_all_non_ascii_review_text(self):
+        module_path = Path(BUNDLED_CJK_FONT_PATH).parents[2] / "manual_cut_review.py"
+        source = module_path.read_text(encoding="utf-8")
+        font = FT2Font(BUNDLED_CJK_FONT_PATH)
+
+        missing = sorted({
+            character for character in source
+            if ord(character) > 127 and font.get_char_index(ord(character)) == 0
+        })
+
+        self.assertEqual(missing, [])
+
     def test_wraps_long_sample_key_without_spaces(self):
         sample_key = (
             "xiaoqian/magraine_angiogram/Saline/"
@@ -125,8 +140,15 @@ class ManualCutReviewTests(unittest.TestCase):
             with open(meta_path, "w", encoding="utf-8") as handle:
                 json.dump(meta, handle)
 
-            summary = render_sample_review(meta_path, dpi=72)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                summary = render_sample_review(meta_path, dpi=72)
+            glyph_warnings = [
+                str(warning.message) for warning in caught
+                if "Glyph" in str(warning.message)
+            ]
 
+            self.assertEqual(glyph_warnings, [])
             self.assertTrue(summary.all_run_positions_match)
             self.assertEqual(summary.run_count, 1)
             self.assertEqual(summary.panel_count, 1)

@@ -25,3 +25,10 @@ vascular-stats = "vascular_statistics.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["python"]
+
+[tool.setuptools.package-data]
+vascular_statistics = [
+    "assets/fonts/*.otf",
+    "assets/fonts/LICENSE.txt",
+    "assets/fonts/README.md",
+]
