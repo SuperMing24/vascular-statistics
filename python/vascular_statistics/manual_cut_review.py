@@ -352,6 +352,79 @@ def _render_panel(
     )
 
 
+def _boxes_overlap(first: Any, second: Any, padding: float = 0.0) -> bool:
+    return (
+        first.x0 < second.x1 + padding
+        and first.x1 + padding > second.x0
+        and first.y0 < second.y1 + padding
+        and first.y1 + padding > second.y0
+    )
+
+
+def _layout_review_figure(
+    figure: Any,
+    axes: np.ndarray,
+    title_artist: Any,
+    sample_artist: Any,
+    summary_artist: Any,
+    legend_artist: Any,
+) -> None:
+    """Place external text bands and reject cross-region overlaps."""
+    gap_pixels = figure.dpi * 6.0 / 72.0
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    figure_height = figure.bbox.height
+
+    title_box = title_artist.get_window_extent(renderer)
+    sample_artist.set_position((0.5, (title_box.y0 - gap_pixels) / figure_height))
+
+    legend_box = legend_artist.get_window_extent(renderer)
+    summary_artist.set_position((
+        0.5,
+        (legend_box.y1 + gap_pixels) / figure_height,
+    ))
+
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    sample_box = sample_artist.get_window_extent(renderer)
+    summary_box = summary_artist.get_window_extent(renderer)
+    bottom = (summary_box.y1 + gap_pixels) / figure_height
+    top = (sample_box.y0 - gap_pixels) / figure_height
+    if bottom >= top:
+        raise RuntimeError("review layout has no room for plot panels")
+
+    figure.tight_layout(rect=(0, bottom, 1, top))
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    boxes = {
+        "title": title_artist.get_window_extent(renderer),
+        "sample": sample_artist.get_window_extent(renderer),
+        "summary": summary_artist.get_window_extent(renderer),
+        "legend": legend_artist.get_window_extent(renderer),
+    }
+    panel_boxes = [
+        axis.get_tightbbox(renderer)
+        for axis in axes.flat
+        if axis.get_visible()
+    ]
+    overlaps: list[str] = []
+    for first, second in (("title", "sample"), ("summary", "legend")):
+        if _boxes_overlap(boxes[first], boxes[second], padding=1.0):
+            overlaps.append(f"{first}/{second}")
+    for index, panel_box in enumerate(panel_boxes, start=1):
+        for name in ("title", "sample", "summary", "legend"):
+            if _boxes_overlap(panel_box, boxes[name], padding=1.0):
+                overlaps.append(f"panel-{index}/{name}")
+    for first in range(len(panel_boxes)):
+        for second in range(first + 1, len(panel_boxes)):
+            if _boxes_overlap(
+                panel_boxes[first], panel_boxes[second], padding=1.0
+            ):
+                overlaps.append(f"panel-{first + 1}/panel-{second + 1}")
+    if overlaps:
+        raise RuntimeError(f"review layout overlap: {', '.join(overlaps)}")
+
+
 def render_sample_review(
     meta_path: str,
     output_path: Optional[str] = None,
@@ -449,25 +522,25 @@ def render_sample_review(
             )
 
     wrapped_sample_key = _wrap_sample_key(sample_key, width=max(60, 72 * columns))
-    figure.text(
+    title_artist = figure.text(
         0.5, 0.985, "人工裁剪坐标核查",
         ha="center", va="top", fontsize=12, fontweight="bold",
     )
-    figure.text(
+    sample_artist = figure.text(
         0.5, 0.94, wrapped_sample_key,
         ha="center", va="top", fontsize=10, fontweight="bold",
     )
     match_label = "一致" if all(run_matches.values()) else "不一致"
-    figure.text(
+    summary_artist = figure.text(
         0.5,
-        0.125,
+        0.0,
         f"shape [D,H,W]={depth,height,width} | 保留体积={retention_fraction:.2%}\n"
         f"结果与计算保留坐标：{match_label}",
         ha="center",
         va="bottom",
         fontsize=9,
     )
-    legend = [
+    legend_handles = [
         Patch(facecolor="#e0f5e0", edgecolor="none", label="保留 XY 区域"),
         Patch(facecolor="#ffc7bd", edgecolor="none", label="裁剪 XY 区域（已删除）"),
         Line2D([], [], color="#6b7280", marker=".", linestyle="None", label="源骨架点"),
@@ -478,13 +551,18 @@ def render_sample_review(
             linestyle="-", label="多边形与人工选点",
         ),
     ]
-    figure.legend(
-        handles=legend, loc="lower center", bbox_to_anchor=(0.5, 0.015),
+    legend_artist = figure.legend(
+        handles=legend_handles, loc="lower center", bbox_to_anchor=(0.5, 0.012),
         ncol=3, fontsize=8,
     )
-    path_lines = wrapped_sample_key.count("\n") + 1
-    top = 0.81 if path_lines > 1 else 0.86
-    figure.tight_layout(rect=(0, 0.18, 1, top))
+    _layout_review_figure(
+        figure,
+        axes,
+        title_artist,
+        sample_artist,
+        summary_artist,
+        legend_artist,
+    )
 
     temporary = output_path + ".tmp"
     try:

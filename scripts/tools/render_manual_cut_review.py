@@ -72,7 +72,8 @@ def main() -> None:
             state = "match" if summary.all_run_positions_match else "MISMATCH"
             print(
                 f"[rendered] {sample_key}: runs={summary.run_count} "
-                f"panels={summary.panel_count} positions={state} {summary.output_path}"
+                f"panels={summary.panel_count} positions={state} "
+                f"layout=nonoverlap {summary.output_path}"
             )
         except Exception as exc:
             failed += 1

@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 from vascular_statistics.manual_cut import CutLayer, cut_pajek_graph
 from vascular_statistics.manual_cut_review import (
     BUNDLED_CJK_FONT_PATH,
+    _layout_review_figure,
     _review_regions,
     _wrap_sample_key,
     discover_manual_cut_metadata,
@@ -50,6 +51,57 @@ class ManualCutReviewTests(unittest.TestCase):
 
         self.assertIn("\n", wrapped)
         self.assertTrue(all(len(line) <= 60 for line in wrapped.splitlines()))
+
+    def test_compact_multi_panel_layout_has_no_overlaps(self):
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Patch
+
+        figure, axes = plt.subplots(3, 2, figsize=(9.6, 14.6), squeeze=False)
+        try:
+            for row in axes:
+                for axis in row:
+                    axis.set_xlabel("x（骨架/图像坐标）", fontsize=8)
+                    axis.set_ylabel("y（向下递增）", fontsize=8)
+                    axis.set_title(
+                        "run_20260629_010053 | p2 | Z 帧 29-45", fontsize=9
+                    )
+            title = figure.text(
+                0.5, 0.985, "人工裁剪坐标核查",
+                ha="center", va="top", fontsize=12, fontweight="bold",
+            )
+            sample = figure.text(
+                0.5, 0.94,
+                _wrap_sample_key(
+                    "xiaoqian/magraine_angiogram/Saline/"
+                    "20250911_A88_D9+8_angiogram_crop_75_102",
+                    width=60,
+                ),
+                ha="center", va="top", fontsize=10, fontweight="bold",
+            )
+            summary = figure.text(
+                0.5, 0.0,
+                "shape [D,H,W]=(57,512,512) | 保留体积=68.99%\n"
+                "结果与计算保留坐标：一致",
+                ha="center", va="bottom", fontsize=9,
+            )
+            legend = figure.legend(
+                handles=[
+                    Patch(label="保留 XY 区域"),
+                    Patch(label="裁剪 XY 区域（已删除）"),
+                    Patch(label="源骨架点"),
+                    Patch(label="已删除骨架点"),
+                    Patch(label="最终骨架"),
+                    Patch(label="多边形与人工选点"),
+                ],
+                loc="lower center", bbox_to_anchor=(0.5, 0.012),
+                ncol=3, fontsize=8,
+            )
+
+            _layout_review_figure(
+                figure, axes, title, sample, summary, legend
+            )
+        finally:
+            plt.close(figure)
 
     def test_splits_overlapping_layers_into_exact_union_regions(self):
         polygon = np.asarray([[0, 0], [3, 0], [3, 3], [0, 3]], dtype=float)
