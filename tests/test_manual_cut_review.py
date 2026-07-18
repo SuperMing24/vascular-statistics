@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+
+import networkx as nx
+import numpy as np
+from scipy.io import savemat
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
+
+from vascular_statistics.manual_cut import cut_pajek_graph
+from vascular_statistics.manual_cut_review import (
+    discover_manual_cut_metadata,
+    read_pajek_geometry,
+    render_sample_review,
+)
+
+
+class ManualCutReviewTests(unittest.TestCase):
+    def test_reads_empty_pajek_as_n_by_three_geometry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "empty.pajek")
+            nx.write_pajek(nx.Graph(), path)
+
+            geometry = read_pajek_geometry(path)
+
+            self.assertEqual(geometry.positions_xyz.shape, (0, 3))
+            self.assertEqual(geometry.edges.shape, (0, 2))
+
+    def test_renders_source_deleted_and_final_geometry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_root = os.path.join(tmp, "source")
+            experiment_root = os.path.join(tmp, "experiment")
+            relative = os.path.join("group", "sample")
+            run_name = "run_1"
+            source_run = os.path.join(source_root, relative, run_name)
+            result_sample = os.path.join(experiment_root, "operator", relative)
+            result_run = os.path.join(result_sample, run_name)
+            manual_dir = os.path.join(result_sample, "manual_cut")
+            os.makedirs(source_run)
+            os.makedirs(result_run)
+            os.makedirs(manual_dir)
+
+            graph = nx.Graph()
+            for node, position in enumerate(((0, 0, 0), (1, 1, 0), (3, 3, 0))):
+                graph.add_node(str(node), pos=f"[{position[0]} {position[1]} {position[2]}]", r="1")
+            graph.add_edges_from((("0", "1"), ("1", "2")))
+            source_pajek = os.path.join(source_run, "skeleton.pajek")
+            result_pajek = os.path.join(result_run, "skeleton.pajek")
+            nx.write_pajek(graph, source_pajek)
+
+            polygon = np.asarray([
+                [0.5, 0.5], [2.5, 0.5], [2.5, 2.5], [0.5, 2.5],
+            ])
+            save_info = {
+                "p1": {
+                    "polygonPosition": polygon,
+                    "editStartFrame": 1,
+                    "editEndFrame": 1,
+                    "numFrames": 1,
+                    "fileName": "sample.mat",
+                },
+                "p2": {"polygonPosition": np.empty((0, 2))},
+                "p3": {"polygonPosition": np.empty((0, 2))},
+                "p4": {"polygonPosition": np.empty((0, 2))},
+            }
+            annotation_path = os.path.join(manual_dir, "polygonInfo.mat")
+            savemat(annotation_path, {"saveInfo": save_info})
+
+            from vascular_statistics.manual_cut import load_cut_annotation
+            annotation = load_cut_annotation(annotation_path)
+            cut_pajek_graph(source_pajek, annotation.layers, result_pajek)
+
+            with open(os.path.join(result_sample, "sample_metadata.json"), "w", encoding="utf-8") as handle:
+                json.dump({"stack_properties": {"shape": [4, 4, 1]}}, handle)
+            meta = {
+                "schema_version": "1.0",
+                "source_experiment_root": source_root,
+                "source_sample_relative_path": relative.replace("\\", "/"),
+                "destination_sample_key": "operator/group/sample",
+                "status": "bad_region_removed",
+                "annotation_file": "polygonInfo.mat",
+                "retention": {"shape_dhw": [1, 4, 4], "retained_fraction": 0.5},
+            }
+            meta_path = os.path.join(manual_dir, "manual_cut_meta.json")
+            with open(meta_path, "w", encoding="utf-8") as handle:
+                json.dump(meta, handle)
+
+            summary = render_sample_review(meta_path, dpi=72)
+
+            self.assertTrue(summary.all_run_positions_match)
+            self.assertEqual(summary.run_count, 1)
+            self.assertEqual(summary.panel_count, 1)
+            self.assertTrue(os.path.isfile(summary.output_path))
+            self.assertGreater(os.path.getsize(summary.output_path), 1000)
+            self.assertEqual(
+                discover_manual_cut_metadata(experiment_root), [meta_path]
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()
