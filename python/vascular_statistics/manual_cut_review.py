@@ -132,6 +132,30 @@ def _positions_match(expected: np.ndarray, actual: np.ndarray) -> bool:
     return _position_counter(expected) == _position_counter(actual)
 
 
+def _wrap_sample_key(sample_key: str, width: int) -> str:
+    lines: list[str] = []
+    current = ""
+    for component in sample_key.split("/"):
+        candidate = component if not current else f"{current}/{component}"
+        if current and len(candidate) > width:
+            lines.append(current + "/")
+            current = component
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+
+    wrapped: list[str] = []
+    for line in lines:
+        wrapped.extend(textwrap.wrap(
+            line,
+            width=width,
+            break_long_words=True,
+            break_on_hyphens=False,
+        ) or [""])
+    return "\n".join(wrapped)
+
+
 def _draw_mask(
     axis: Any,
     height: int,
@@ -338,23 +362,20 @@ def render_sample_review(
                 layer, depth, height, width, run_name,
             )
 
-    wrapped_sample_key = textwrap.fill(
-        sample_key,
-        width=max(48, 52 * columns),
-        break_long_words=False,
-        break_on_hyphens=False,
+    wrapped_sample_key = _wrap_sample_key(sample_key, width=max(60, 72 * columns))
+    figure.text(
+        0.5, 0.985, "Manual cut coordinate audit",
+        ha="center", va="top", fontsize=12, fontweight="bold",
     )
-    figure.suptitle(
-        f"Manual cut coordinate audit\n{wrapped_sample_key}",
-        fontsize=12,
-        fontweight="bold",
-        y=0.985,
+    figure.text(
+        0.5, 0.94, wrapped_sample_key,
+        ha="center", va="top", fontsize=10, fontweight="bold",
     )
     match_label = "MATCH" if all(run_matches.values()) else "MISMATCH"
     figure.text(
         0.5,
         0.125,
-        f"shape [D,H,W]={depth,height,width} | retained volume={retention_fraction:.2%} | "
+        f"shape [D,H,W]={depth,height,width} | retained volume={retention_fraction:.2%}\n"
         f"result vs computed retained positions: {match_label}",
         ha="center",
         va="bottom",
@@ -373,8 +394,8 @@ def render_sample_review(
         handles=legend, loc="lower center", bbox_to_anchor=(0.5, 0.015),
         ncol=3, fontsize=8,
     )
-    title_lines = wrapped_sample_key.count("\n") + 2
-    top = 0.84 if title_lines > 2 else 0.87
+    path_lines = wrapped_sample_key.count("\n") + 1
+    top = 0.81 if path_lines > 1 else 0.86
     figure.tight_layout(rect=(0, 0.18, 1, top))
 
     temporary = output_path + ".tmp"

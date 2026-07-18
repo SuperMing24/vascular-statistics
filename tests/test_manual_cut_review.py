@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
 from vascular_statistics.manual_cut import cut_pajek_graph
 from vascular_statistics.manual_cut_review import (
+    _wrap_sample_key,
     discover_manual_cut_metadata,
     read_pajek_geometry,
     render_sample_review,
@@ -23,6 +24,17 @@ from vascular_statistics.manual_cut_review import (
 
 
 class ManualCutReviewTests(unittest.TestCase):
+    def test_wraps_long_sample_key_without_spaces(self):
+        sample_key = (
+            "xiaoqian/magraine_angiogram/Saline/"
+            "20250911_A85_D9+8_angiogram_crop_70_117"
+        )
+
+        wrapped = _wrap_sample_key(sample_key, width=60)
+
+        self.assertIn("\n", wrapped)
+        self.assertTrue(all(len(line) <= 60 for line in wrapped.splitlines()))
+
     def test_reads_empty_pajek_as_n_by_three_geometry(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "empty.pajek")
