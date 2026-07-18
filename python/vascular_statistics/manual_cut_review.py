@@ -421,6 +421,51 @@ def _layout_review_figure(
         if bottom >= top:
             raise RuntimeError("review layout has no room for plot panels")
 
+    for _ in range(4):
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        panel_grid = [
+            [axis.get_tightbbox(renderer) for axis in row]
+            for row in axes
+        ]
+        vertical_shortfall = max(
+            [
+                panel_grid[row + 1][column].y1
+                + 1.0
+                - panel_grid[row][column].y0
+                for row in range(axes.shape[0] - 1)
+                for column in range(axes.shape[1])
+            ]
+            or [0.0]
+        )
+        horizontal_shortfall = max(
+            [
+                panel_grid[row][column].x1
+                + 1.0
+                - panel_grid[row][column + 1].x0
+                for row in range(axes.shape[0])
+                for column in range(axes.shape[1] - 1)
+            ]
+            or [0.0]
+        )
+        if vertical_shortfall < 0.5 and horizontal_shortfall < 0.5:
+            break
+        axis_boxes = [axis.get_window_extent(renderer) for axis in axes.flat]
+        adjustments: dict[str, float] = {}
+        if vertical_shortfall >= 0.5:
+            average_height = float(np.mean([box.height for box in axis_boxes]))
+            adjustments["hspace"] = (
+                figure.subplotpars.hspace
+                + (vertical_shortfall + 1.0) / average_height
+            )
+        if horizontal_shortfall >= 0.5:
+            average_width = float(np.mean([box.width for box in axis_boxes]))
+            adjustments["wspace"] = (
+                figure.subplotpars.wspace
+                + (horizontal_shortfall + 1.0) / average_width
+            )
+        figure.subplots_adjust(**adjustments)
+
     figure.canvas.draw()
     renderer = figure.canvas.get_renderer()
     boxes = {

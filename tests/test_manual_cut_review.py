@@ -56,7 +56,7 @@ class ManualCutReviewTests(unittest.TestCase):
         import matplotlib.pyplot as plt
         from matplotlib.patches import Patch
 
-        for rows, columns in ((1, 3), (3, 2)):
+        for rows, columns in ((1, 3), (2, 2), (3, 2)):
             with self.subTest(rows=rows, columns=columns):
                 figure, axes = plt.subplots(
                     rows,
@@ -77,6 +77,18 @@ class ManualCutReviewTests(unittest.TestCase):
                         axis.set_title(
                             "run_20260629_010053 | p2 | Z 帧 29-45",
                             fontsize=9,
+                        )
+                        axis.annotate(
+                            "1", (0, 0), xytext=(3, 3),
+                            textcoords="offset points", fontsize=6,
+                        )
+                        axis.text(
+                            0.01, 0.01, "保留 XY 像素：171,457/262,144",
+                            transform=axis.transAxes, fontsize=6.5,
+                            bbox={
+                                "facecolor": "white",
+                                "edgecolor": "#9ca3af",
+                            },
                         )
                     title = figure.text(
                         0.5, 0.985, "人工裁剪坐标核查",
