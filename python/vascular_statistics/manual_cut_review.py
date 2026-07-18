@@ -11,6 +11,7 @@ from collections import Counter
 from dataclasses import dataclass
 import json
 import os
+import textwrap
 from typing import Any, Optional, Sequence
 
 import matplotlib
@@ -327,7 +328,7 @@ def render_sample_review(
     columns = len(layers)
     figure, axes = plt.subplots(
         rows, columns,
-        figsize=(max(5.0, 4.8 * columns), max(4.8, 4.5 * rows)),
+        figsize=(max(6.0, 4.8 * columns), max(5.6, 4.5 * rows + 1.1)),
         squeeze=False,
     )
     for row, run_name in enumerate(run_names):
@@ -337,14 +338,27 @@ def render_sample_review(
                 layer, depth, height, width, run_name,
             )
 
+    wrapped_sample_key = textwrap.fill(
+        sample_key,
+        width=max(48, 52 * columns),
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
     figure.suptitle(
-        f"Manual cut coordinate audit\n{sample_key}", fontsize=12, fontweight="bold"
+        f"Manual cut coordinate audit\n{wrapped_sample_key}",
+        fontsize=12,
+        fontweight="bold",
+        y=0.985,
     )
     match_label = "MATCH" if all(run_matches.values()) else "MISMATCH"
-    figure.supxlabel(
+    figure.text(
+        0.5,
+        0.125,
         f"shape [D,H,W]={depth,height,width} | retained volume={retention_fraction:.2%} | "
         f"result vs computed retained positions: {match_label}",
-        fontsize=9, y=0.075,
+        ha="center",
+        va="bottom",
+        fontsize=9,
     )
     legend = [
         Patch(facecolor="#e0f5e0", edgecolor="none", label="retained XY region"),
@@ -356,10 +370,12 @@ def render_sample_review(
                linestyle="-", label="polygon and selected points"),
     ]
     figure.legend(
-        handles=legend, loc="lower center", bbox_to_anchor=(0.5, 0.01),
+        handles=legend, loc="lower center", bbox_to_anchor=(0.5, 0.015),
         ncol=3, fontsize=8,
     )
-    figure.tight_layout(rect=(0, 0.13, 1, 0.91))
+    title_lines = wrapped_sample_key.count("\n") + 2
+    top = 0.84 if title_lines > 2 else 0.87
+    figure.tight_layout(rect=(0, 0.18, 1, top))
 
     temporary = output_path + ".tmp"
     try:
