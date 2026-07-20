@@ -80,6 +80,7 @@ def collect(final_root: Path, sources: dict[str, Path]):
             context = {
                 "experimenter": exp, "sample_key": key, "source_sample_key": item["source_sample_key"],
                 "status": item["status"], "series": parts[0], "group": str(parsed.get("group", parts[0])),
+                "subgroup": parts[1] if exp == "xiaoqian" and len(parts) > 1 else parts[0],
                 "batch_id": str(parsed.get("batch_id", parsed.get("animal_id", "?"))),
                 "study_day": parsed.get("study_day"), "study_day_label": str(parsed.get("study_day_label", parsed.get("daypoint", "?"))),
                 "acquisition_date": str(parsed.get("acquisition_date", "?")),
@@ -148,20 +149,23 @@ def correlation_table(rows):
 def descriptive_table(rows):
     groups = {}
     for row in rows:
-        levels = (("experimenter", row["experimenter"], "all", "all"),
-                  ("group", row["experimenter"], row["group"], "all"),
-                  ("group_day", row["experimenter"], row["group"], row["study_day_label"]))
-        for level, exp, group, day in levels:
-            groups.setdefault((level, exp, group, day, row["population"], row["metric"]), []).append(row["final_value"])
+        levels = (("experimenter", row["experimenter"], "all", "all", "all"),
+                  ("group", row["experimenter"], row["group"], "all", "all"),
+                  ("group_day", row["experimenter"], row["group"], "all", row["study_day_label"]),
+                  ("subgroup", row["experimenter"], row["group"], row["subgroup"], "all"),
+                  ("subgroup_day", row["experimenter"], row["group"], row["subgroup"], row["study_day_label"]))
+        for level, exp, group, subgroup, day in levels:
+            key = (level, exp, group, subgroup, day, row["population"], row["metric"])
+            groups.setdefault(key, []).append(row["final_value"])
     out = []
     for key, values in sorted(groups.items(), key=lambda x: tuple(map(str, x[0]))):
         a = np.array(values)
-        out.append({"level": key[0], "experimenter": key[1], "group": key[2], "study_day_label": key[3],
-                    "population": key[4], "metric": key[5], "n_samples": len(a), "mean": a.mean(),
+        out.append({"level": key[0], "experimenter": key[1], "group": key[2],
+                    "subgroup": key[3], "study_day_label": key[4],
+                    "population": key[5], "metric": key[6], "n_samples": len(a), "mean": a.mean(),
                     "stdev": a.std(ddof=1) if len(a)>1 else math.nan, "median": np.median(a),
                     "q1": np.percentile(a,25), "q3": np.percentile(a,75), "min": a.min(), "max": a.max()})
     return out
-
 
 def write_csv(path, rows):
     with path.open("w", encoding="utf-8-sig", newline="") as handle:

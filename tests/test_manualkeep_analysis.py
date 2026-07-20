@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 from vascular_statistics.manualkeep_analysis import (  # noqa: E402
     bh,
     bootstrap_ci,
+    descriptive_table,
     rank_biserial,
     parse_summary,
 )
@@ -47,6 +48,16 @@ class ManualKeepAnalysisTests(unittest.TestCase):
         second = bootstrap_ci(values, np.random.default_rng(7), 100)
         self.assertEqual(first, second)
 
+    def test_descriptive_table_keeps_subgroup(self):
+        row = {
+            "experimenter": "xiaoqian", "group": "ACTH_angiogram",
+            "subgroup": "ACTH_HNK", "study_day_label": "D15",
+            "population": "full", "metric": "avg_diameter_um",
+            "final_value": 5.2,
+        }
+        result = descriptive_table([row])
+        subgroup = [item for item in result if item["level"] == "subgroup"]
+        self.assertEqual(subgroup[0]["subgroup"], "ACTH_HNK")
 
 if __name__ == "__main__":
     unittest.main()
